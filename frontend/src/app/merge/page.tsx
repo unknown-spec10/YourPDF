@@ -10,7 +10,7 @@ import ProgressBar from '@/components/ProgressBar'
 import { useJobPolling } from '@/hooks/useJobPolling'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 export default function MergePage() {
   const [files, setFiles] = useState<File[]>([])

@@ -10,7 +10,7 @@ import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
 import { useJobPolling } from '@/hooks/useJobPolling'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 export default function PdfToImagesPage() {
   const [file, setFile] = useState<File | null>(null)

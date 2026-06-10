@@ -7,7 +7,7 @@ WORKDIR /app
 
 # Install dependencies based on the preferred package manager
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm install
 
 # Rebuild the source code only when needed
 FROM base AS builder
@@ -19,7 +19,7 @@ COPY . .
 # Learn more here: https://nextjs.org/telemetry
 # Disable telemetry during the build.
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_PUBLIC_API_URL=http://localhost/api
+ENV NEXT_PUBLIC_API_URL=""
 
 RUN npm run build
 

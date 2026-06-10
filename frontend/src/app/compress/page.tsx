@@ -11,7 +11,7 @@ import ProgressBar from '@/components/ProgressBar'
 import { useJobPolling } from '@/hooks/useJobPolling'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 const formatBytes = (bytes: number) => {
   if (bytes === 0) return '0 Bytes'

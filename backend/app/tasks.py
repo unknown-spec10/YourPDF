@@ -11,6 +11,7 @@ import img2pdf
 from pdf2docx import Converter
 from app.celery_app import celery
 from app.s3 import store_processed_file, is_s3_configured
+from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
 
@@ -1285,6 +1286,496 @@ def ocr_pdf_task(self, file_path: str, language: str = "eng", original_filename:
         raise Exception(f"OCR processing failed: {e.stderr or e.stdout}")
     except Exception as e:
         logger.error(f"OCR task failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+def _resolve_path(path_str: str) -> str:
+    path_str = path_str.replace('\\', '/')
+    if not os.path.isabs(path_str):
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        backend_root = os.path.dirname(app_dir)
+        path_str = os.path.abspath(os.path.join(backend_root, path_str))
+    return path_str
+
+
+@celery.task(bind=True)
+def compress_image_task(self, file_path: str, quality: int, original_filename: str = None):
+    """
+    Compresses an image (JPEG, PNG, WEBP) using Pillow.
+    """
+    logger.info(f"Starting image compression task for {file_path} with quality={quality}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing image compression..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+        raise ValueError(f"Unsupported image format: {ext}")
+        
+    output_filename = f"compressed_{uuid.uuid4()}{ext}"
+    output_dir = os.path.dirname(file_path)
+    output_path = os.path.join(output_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Applying compression..."})
+        with Image.open(file_path) as img:
+            # JPEG does not support alpha channel (RGBA), convert to RGB
+            if ext in [".jpg", ".jpeg"] and img.mode in ("RGBA", "LA"):
+                img = img.convert("RGB")
+                
+            if ext in [".jpg", ".jpeg"]:
+                img.save(output_path, "JPEG", quality=quality, optimize=True)
+            elif ext == ".webp":
+                img.save(output_path, "WEBP", quality=quality, optimize=True)
+            elif ext == ".png":
+                # For PNG, quality doesn't apply directly. We use optimize=True.
+                # If quality is low/medium, we can quantize colors to reduce size (reduce to 8-bit palette).
+                if quality < 50:
+                    img = img.quantize(colors=128).convert("RGBA")
+                elif quality < 80:
+                    img = img.quantize(colors=256).convert("RGBA")
+                img.save(output_path, "PNG", optimize=True)
+                
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving compressed image..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext_orig = os.path.splitext(original_filename)
+            original_name = f"{base}_compressed{ext_orig}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store compressed image.")
+            
+        if not is_s3_configured():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            backend_root = os.path.dirname(app_dir)
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "original_size_bytes": os.path.getsize(file_path),
+            "compressed_size_bytes": os.path.getsize(output_path),
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"Image compression failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def resize_image_task(self, file_path: str, width: int = None, height: int = None, percentage: int = None, maintain_aspect: bool = True, original_filename: str = None):
+    """
+    Resizes an image by width/height pixels or by a percentage.
+    """
+    logger.info(f"Starting image resize task for {file_path}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing image resize..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    ext = os.path.splitext(file_path)[1].lower()
+    output_filename = f"resized_{uuid.uuid4()}{ext}"
+    output_dir = os.path.dirname(file_path)
+    output_path = os.path.join(output_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Resizing image..."})
+        with Image.open(file_path) as img:
+            orig_w, orig_h = img.size
+            
+            # Determine new size
+            if percentage is not None:
+                new_w = int(orig_w * (percentage / 100.0))
+                new_h = int(orig_h * (percentage / 100.0))
+            else:
+                if width and height:
+                    if maintain_aspect:
+                        # Scale to fit within width/height while maintaining aspect ratio
+                        ratio = min(width / orig_w, height / orig_h)
+                        new_w = int(orig_w * ratio)
+                        new_h = int(orig_h * ratio)
+                    else:
+                        new_w = width
+                        new_h = height
+                elif width:
+                    new_w = width
+                    new_h = int(orig_h * (width / orig_w))
+                elif height:
+                    new_h = height
+                    new_w = int(orig_w * (height / orig_h))
+                else:
+                    new_w, new_h = orig_w, orig_h
+                    
+            # Ensure dimensions are at least 1px
+            new_w = max(1, new_w)
+            new_h = max(1, new_h)
+            
+            resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            resized_img.save(output_path, save_all=True if ext == ".gif" else False)
+            
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving resized image..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext_orig = os.path.splitext(original_filename)
+            original_name = f"{base}_resized{ext_orig}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store resized image.")
+            
+        if not is_s3_configured():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            backend_root = os.path.dirname(app_dir)
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url,
+            "width": new_w,
+            "height": new_h
+        }
+    except Exception as e:
+        logger.error(f"Image resize failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def crop_image_task(self, file_path: str, x: int, y: int, width: int, height: int, original_filename: str = None):
+    """
+    Crops an image using bounding box coordinates (x, y, width, height).
+    """
+    logger.info(f"Starting image crop task for {file_path} at x={x}, y={y}, w={width}, h={height}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing image crop..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    ext = os.path.splitext(file_path)[1].lower()
+    output_filename = f"cropped_{uuid.uuid4()}{ext}"
+    output_dir = os.path.dirname(file_path)
+    output_path = os.path.join(output_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Cropping image..."})
+        with Image.open(file_path) as img:
+            orig_w, orig_h = img.size
+            
+            # Ensure coordinates are within image bounds
+            x = max(0, min(x, orig_w))
+            y = max(0, min(y, orig_h))
+            width = max(1, min(width, orig_w - x))
+            height = max(1, min(height, orig_h - y))
+            
+            box = (x, y, x + width, y + height)
+            cropped_img = img.crop(box)
+            cropped_img.save(output_path)
+            
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving cropped image..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext_orig = os.path.splitext(original_filename)
+            original_name = f"{base}_cropped{ext_orig}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store cropped image.")
+            
+        if not is_s3_configured():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            backend_root = os.path.dirname(app_dir)
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"Image crop failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def convert_image_task(self, file_path: str, target_format: str, original_filename: str = None):
+    """
+    Converts image to target format (JPG, PNG, WEBP, BMP, TIFF).
+    """
+    logger.info(f"Starting image conversion task for {file_path} to format {target_format}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing image conversion..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    target_format = target_format.lower()
+    valid_formats = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp", "bmp": "bmp", "tiff": "tiff"}
+    
+    if target_format not in valid_formats:
+        raise ValueError(f"Unsupported target format: {target_format}")
+        
+    pillow_format = valid_formats[target_format]
+    out_ext = f".{target_format}"
+    if out_ext == ".jpeg":
+        out_ext = ".jpg"
+        
+    output_filename = f"converted_{uuid.uuid4()}{out_ext}"
+    output_dir = os.path.dirname(file_path)
+    output_path = os.path.join(output_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Converting format..."})
+        with Image.open(file_path) as img:
+            # Convert RGBA to RGB for JPEG
+            if pillow_format == "jpeg" and img.mode in ("RGBA", "LA"):
+                img = img.convert("RGB")
+            elif img.mode == "P" and pillow_format not in ("png", "gif"):
+                # Convert palette mode to RGB/RGBA for webp/tiff/bmp
+                img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+                
+            img.save(output_path, pillow_format.upper())
+            
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving converted image..."})
+        
+        original_name = None
+        if original_filename:
+            base, _ = os.path.splitext(original_filename)
+            original_name = f"{base}{out_ext}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store converted image.")
+            
+        if not is_s3_configured():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            backend_root = os.path.dirname(app_dir)
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"Image conversion failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def rotate_image_task(self, file_path: str, angle: int, original_filename: str = None):
+    """
+    Rotates an image by 90, 180, or 270 degrees.
+    """
+    logger.info(f"Starting image rotation task for {file_path} with angle={angle}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing image rotation..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    ext = os.path.splitext(file_path)[1].lower()
+    output_filename = f"rotated_{uuid.uuid4()}{ext}"
+    output_dir = os.path.dirname(file_path)
+    output_path = os.path.join(output_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Rotating image..."})
+        with Image.open(file_path) as img:
+            # Rotate using transpose for clean 90-degree step rotations
+            if angle == 90:
+                rotated_img = img.transpose(Image.Transpose.ROTATE_270)
+            elif angle == 180:
+                rotated_img = img.transpose(Image.Transpose.ROTATE_180)
+            elif angle == 270:
+                rotated_img = img.transpose(Image.Transpose.ROTATE_90)
+            else:
+                rotated_img = img.rotate(-angle, expand=True)
+                
+            rotated_img.save(output_path)
+            
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving rotated image..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext_orig = os.path.splitext(original_filename)
+            original_name = f"{base}_rotated{ext_orig}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store rotated image.")
+            
+        if not is_s3_configured():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            backend_root = os.path.dirname(app_dir)
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"Image rotation failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def watermark_image_task(self, file_path: str, text: str, color: str = "gray", opacity: float = 0.3, position: str = "center", original_filename: str = None):
+    """
+    Overlays a text watermark onto an image.
+    Position can be: "center", "top-left", "top-right", "bottom-left", "bottom-right", "tile".
+    """
+    logger.info(f"Starting image watermark task for {file_path} with text='{text}'")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing image watermark..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    ext = os.path.splitext(file_path)[1].lower()
+    output_filename = f"watermarked_{uuid.uuid4()}{ext}"
+    output_dir = os.path.dirname(file_path)
+    output_path = os.path.join(output_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Applying watermark..."})
+        with Image.open(file_path) as img:
+            # We need RGBA mode for transparency/opacity layer
+            watermark_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(watermark_layer)
+            
+            colors_map = {
+                "red": (255, 0, 0),
+                "green": (0, 255, 0),
+                "blue": (0, 0, 255),
+                "gray": (128, 128, 128),
+                "black": (0, 0, 0),
+                "white": (255, 255, 255)
+            }
+            base_color = colors_map.get(color.lower(), (128, 128, 128))
+            rgba_color = base_color + (int(opacity * 255),)
+            
+            # Choose a dynamic font size based on image size
+            font_size = max(16, int(img.size[0] / 20))
+            
+            try:
+                # Load default truetype font or fallback to default
+                font = ImageFont.load_default()
+                if sys.platform == "win32":
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                else:
+                    font = ImageFont.truetype("LiberationSans-Regular.ttf", font_size)
+            except IOError:
+                font = ImageFont.load_default()
+                
+            w, h = img.size
+            
+            if hasattr(draw, "textbbox"):
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+            else:
+                text_w, text_h = draw.textsize(text, font=font) if hasattr(draw, "textsize") else (font_size * len(text) * 0.6, font_size)
+                
+            # Place watermark based on position
+            if position == "center":
+                draw.text(((w - text_w) / 2, (h - text_h) / 2), text, font=font, fill=rgba_color)
+            elif position == "top-left":
+                draw.text((20, 20), text, font=font, fill=rgba_color)
+            elif position == "top-right":
+                draw.text((w - text_w - 20, 20), text, font=font, fill=rgba_color)
+            elif position == "bottom-left":
+                draw.text((20, h - text_h - 20), text, font=font, fill=rgba_color)
+            elif position == "bottom-right":
+                draw.text((w - text_w - 20, h - text_h - 20), text, font=font, fill=rgba_color)
+            elif position == "tile":
+                step_x = max(100, int(text_w * 1.5))
+                step_y = max(100, int(text_h * 2.0))
+                for x_pos in range(0, w, step_x):
+                    for y_pos in range(0, h, step_y):
+                        draw.text((x_pos, y_pos), text, font=font, fill=rgba_color)
+                        
+            orig_rgba = img.convert("RGBA")
+            watermarked_img = Image.alpha_composite(orig_rgba, watermark_layer)
+            
+            if ext in [".jpg", ".jpeg"]:
+                watermarked_img.convert("RGB").save(output_path, "JPEG")
+            else:
+                watermarked_img.save(output_path)
+                
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving watermarked image..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext_orig = os.path.splitext(original_filename)
+            original_name = f"{base}_watermark{ext_orig}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store watermarked image.")
+            
+        if not is_s3_configured():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            backend_root = os.path.dirname(app_dir)
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"Image watermark failed: {e}")
         raise e
     finally:
         for path in (file_path, output_path):

@@ -266,3 +266,96 @@ def test_ocr_pdf_success(mock_delay, mock_open, mock_copy, client):
     mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "eng", original_filename="doc.pdf")
 
 
+def test_image_invalid_extension(client):
+    """
+    Test that uploading a non-image file to image endpoints results in a 400 bad request error.
+    """
+    files = {"file": ("test.pdf", b"%PDF-1.4 dummy", "application/pdf")}
+    response = client.post("/api/image/compress", files=files, data={"quality": "75"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only JPG, JPEG, PNG, and WEBP image files are supported."
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.compress_image_task.delay")
+def test_compress_image_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-img-compress-123"
+    mock_delay.return_value = MockTask()
+    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
+    response = client.post("/api/image/compress", files=file, data={"quality": "80"})
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-img-compress-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 80, original_filename="photo.jpg")
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.resize_image_task.delay")
+def test_resize_image_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-img-resize-123"
+    mock_delay.return_value = MockTask()
+    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
+    response = client.post("/api/image/resize", files=file, data={"width": "800", "height": "600", "maintain_aspect": "true"})
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-img-resize-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 800, 600, None, True, original_filename="photo.jpg")
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.crop_image_task.delay")
+def test_crop_image_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-img-crop-123"
+    mock_delay.return_value = MockTask()
+    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
+    response = client.post("/api/image/crop", files=file, data={"x": "10", "y": "20", "width": "100", "height": "150"})
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-img-crop-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 10, 20, 100, 150, original_filename="photo.jpg")
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.convert_image_task.delay")
+def test_convert_image_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-img-convert-123"
+    mock_delay.return_value = MockTask()
+    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
+    response = client.post("/api/image/convert", files=file, data={"target_format": "png"})
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-img-convert-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "png", original_filename="photo.jpg")
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.rotate_image_task.delay")
+def test_rotate_image_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-img-rotate-123"
+    mock_delay.return_value = MockTask()
+    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
+    response = client.post("/api/image/rotate", files=file, data={"angle": "90"})
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-img-rotate-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 90, original_filename="photo.jpg")
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.watermark_image_task.delay")
+def test_watermark_image_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-img-watermark-123"
+    mock_delay.return_value = MockTask()
+    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
+    response = client.post("/api/image/watermark", files=file, data={
+        "text": "CONFIDENTIAL",
+        "color": "red",
+        "opacity": "0.5",
+        "position": "center"
+    })
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-img-watermark-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "CONFIDENTIAL", "red", 0.5, "center", original_filename="photo.jpg")
+
+

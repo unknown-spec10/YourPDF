@@ -21,7 +21,13 @@ from app.tasks import (
     organize_pdf_task,
     watermark_pdf_task,
     add_page_numbers_task,
-    ocr_pdf_task
+    ocr_pdf_task,
+    compress_image_task,
+    resize_image_task,
+    crop_image_task,
+    convert_image_task,
+    rotate_image_task,
+    watermark_image_task
 )
 from app.celery_app import celery
 
@@ -487,6 +493,114 @@ def get_pdf_info(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to parse PDF: {str(e)}")
 
 
+
+
+def validate_image_file(file: UploadFile):
+    ext = os.path.splitext(file.filename.lower())[1]
+    if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+        raise HTTPException(status_code=400, detail="Only JPG, JPEG, PNG, and WEBP image files are supported.")
+
+def save_uploaded_image(file: UploadFile, prefix: str = "image_upload") -> tuple[str, str]:
+    ext = os.path.splitext(file.filename.lower())[1]
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    filename = f"{prefix}_{uuid.uuid4()}{ext}"
+    host_file_path = os.path.join(tmp_dir, filename)
+    
+    try:
+        with open(host_file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
+        
+    return filename, os.path.join("tmp", filename)
+
+@app.post("/api/image/compress", status_code=202)
+def compress_image(
+    file: UploadFile = File(...),
+    quality: int = Form(75)
+):
+    validate_image_file(file)
+    if not (1 <= quality <= 100):
+        raise HTTPException(status_code=400, detail="Quality must be between 1 and 100.")
+    _, relative_path = save_uploaded_image(file, "compress")
+    task = compress_image_task.delay(relative_path, quality, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/image/resize", status_code=202)
+def resize_image(
+    file: UploadFile = File(...),
+    width: int = Form(None),
+    height: int = Form(None),
+    percentage: int = Form(None),
+    maintain_aspect: bool = Form(True)
+):
+    validate_image_file(file)
+    if percentage is None and width is None and height is None:
+        raise HTTPException(status_code=400, detail="Must specify either width, height, or percentage.")
+    _, relative_path = save_uploaded_image(file, "resize")
+    task = resize_image_task.delay(relative_path, width, height, percentage, maintain_aspect, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/image/crop", status_code=202)
+def crop_image(
+    file: UploadFile = File(...),
+    x: int = Form(...),
+    y: int = Form(...),
+    width: int = Form(...),
+    height: int = Form(...)
+):
+    validate_image_file(file)
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="Width and height must be greater than 0.")
+    _, relative_path = save_uploaded_image(file, "crop")
+    task = crop_image_task.delay(relative_path, x, y, width, height, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/image/convert", status_code=202)
+def convert_image(
+    file: UploadFile = File(...),
+    target_format: str = Form(...)
+):
+    validate_image_file(file)
+    target_format = target_format.lower()
+    if target_format not in ["jpg", "jpeg", "png", "webp", "bmp", "tiff"]:
+        raise HTTPException(status_code=400, detail="Invalid target format. Supported: JPG, JPEG, PNG, WEBP, BMP, TIFF.")
+    _, relative_path = save_uploaded_image(file, "convert")
+    task = convert_image_task.delay(relative_path, target_format, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/image/rotate", status_code=202)
+def rotate_image(
+    file: UploadFile = File(...),
+    angle: int = Form(...)
+):
+    validate_image_file(file)
+    if angle not in [90, 180, 270]:
+        raise HTTPException(status_code=400, detail="Invalid rotation angle. Must be 90, 180, or 270.")
+    _, relative_path = save_uploaded_image(file, "rotate")
+    task = rotate_image_task.delay(relative_path, angle, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/image/watermark", status_code=202)
+def watermark_image(
+    file: UploadFile = File(...),
+    text: str = Form(...),
+    color: str = Form("gray"),
+    opacity: float = Form(0.3),
+    position: str = Form("center")
+):
+    validate_image_file(file)
+    if not text:
+        raise HTTPException(status_code=400, detail="Watermark text cannot be empty.")
+    if position not in ["center", "top-left", "top-right", "bottom-left", "bottom-right", "tile"]:
+        raise HTTPException(status_code=400, detail="Invalid position specification.")
+    _, relative_path = save_uploaded_image(file, "watermark")
+    task = watermark_image_task.delay(relative_path, text, color, opacity, position, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
 
 
 @app.get("/api/status/{job_id}")

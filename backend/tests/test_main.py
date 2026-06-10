@@ -359,3 +359,84 @@ def test_watermark_image_success(mock_delay, mock_open, mock_copy, client):
     mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "CONFIDENTIAL", "red", 0.5, "center", original_filename="photo.jpg")
 
 
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.merge_docx_task.delay")
+def test_merge_docx_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-merge-docx-123"
+    mock_delay.return_value = MockTask()
+
+    files = [
+        ("files", ("doc1.docx", b"docx_data_1", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+        ("files", ("doc2.docx", b"docx_data_2", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+    ]
+    response = client.post("/api/office/merge-docx", files=files)
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-merge-docx-123"
+    mock_delay.assert_called_once()
+    assert response.json()["status"] == "queued"
+
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.docx_to_images_task.delay")
+def test_docx_to_images_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-docx2img-123"
+    mock_delay.return_value = MockTask()
+
+    file = {"file": ("document.docx", b"docx_data", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+    response = client.post("/api/office/docx-to-images", files=file, data={"format": "png", "dpi": "150"})
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-docx2img-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "png", 150, original_filename="document.docx")
+
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.pptx_to_pdf_task.delay")
+def test_pptx_to_pdf_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-pptx2pdf-123"
+    mock_delay.return_value = MockTask()
+
+    file = {"file": ("slides.pptx", b"pptx_data", "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
+    response = client.post("/api/office/pptx-to-pdf", files=file)
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-pptx2pdf-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], original_filename="slides.pptx")
+
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.pptx_to_images_task.delay")
+def test_pptx_to_images_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-pptx2img-123"
+    mock_delay.return_value = MockTask()
+
+    file = {"file": ("slides.pptx", b"pptx_data", "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
+    response = client.post("/api/office/pptx-to-images", files=file, data={"format": "jpg", "dpi": "200"})
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-pptx2img-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "jpg", 200, original_filename="slides.pptx")
+
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.merge_pptx_task.delay")
+def test_merge_pptx_success(mock_delay, mock_open, mock_copy, client):
+    class MockTask:
+        id = "mocked-merge-pptx-123"
+    mock_delay.return_value = MockTask()
+
+    files = [
+        ("files", ("slides1.pptx", b"pptx_data_1", "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
+        ("files", ("slides2.pptx", b"pptx_data_2", "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
+    ]
+    response = client.post("/api/office/merge-pptx", files=files)
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-merge-pptx-123"
+    mock_delay.assert_called_once()
+    assert response.json()["status"] == "queued"

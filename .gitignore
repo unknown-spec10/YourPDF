@@ -12,4 +12,4 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-*.md
+docs/

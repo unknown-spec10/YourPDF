@@ -25,16 +25,16 @@ export default function FilePreview({
   }
 
   return (
-    <div className="flex items-center justify-between rounded-xl border border-border bg-surface p-4 transition-colors duration-200">
+    <div className="flex items-center justify-between rounded-xl border border-border/40 bg-surface/30 backdrop-blur-md p-4 shadow-sm transition-all duration-200 hover:border-accent/30 hover:shadow-md">
       <div className="flex items-center gap-3 min-w-0">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent shadow-inner">
           <FileText className="h-5 w-5" />
         </div>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-foreground truncate max-w-[200px] sm:max-w-md">
             {fileName}
           </p>
-          <p className="text-xs text-muted mt-0.5">
+          <p className="text-xs text-muted mt-0.5 font-mono">
             {formatBytes(fileSize)}
           </p>
         </div>
@@ -44,7 +44,7 @@ export default function FilePreview({
         type="button"
         onClick={onRemove}
         disabled={disabled}
-        className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted hover:bg-background hover:text-foreground transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/40 text-muted hover:bg-rose-500/10 hover:text-rose-500 hover:border-rose-500/30 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         aria-label="Remove file"
       >
         <X className="h-4 w-4" />

@@ -15,6 +15,8 @@ export interface JobStatusResponse {
     download_url: string
     text_snippet?: string
     extracted_text?: string
+    width?: number
+    height?: number
   }
 }
 

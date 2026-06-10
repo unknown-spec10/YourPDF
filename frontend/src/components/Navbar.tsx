@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Sun, Moon, FileSpreadsheet } from 'lucide-react'
+import { motion } from 'framer-motion'
 import { useAppStore } from '@/lib/store'
 
 function GithubIcon({ className }: { className?: string }) {
@@ -52,11 +53,11 @@ export default function Navbar() {
   ]
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border bg-background/80 backdrop-blur-md transition-colors duration-200">
+    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-surface/50 backdrop-blur-lg shadow-lg shadow-black/5 transition-colors duration-200">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 group">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent text-accent-foreground transition-all duration-200 group-hover:scale-105">
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-md shadow-accent/10 transition-all duration-300 group-hover:scale-105 group-hover:shadow-accent/20">
             <FileSpreadsheet className="h-5 w-5" />
           </div>
           <span className="text-xl font-bold tracking-tight text-foreground transition-colors group-hover:text-accent">
@@ -72,11 +73,18 @@ export default function Navbar() {
               <Link
                 key={link.href}
                 href={link.href}
-                className={`transition-colors duration-200 hover:text-accent ${
+                className={`relative py-1.5 transition-all duration-200 hover:text-accent ${
                   isActive ? 'text-accent' : 'text-muted'
                 }`}
               >
-                {link.name}
+                <span>{link.name}</span>
+                {isActive && (
+                  <motion.div
+                    layoutId="navbarActiveIndicator"
+                    className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent rounded-full"
+                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                  />
+                )}
               </Link>
             )
           })}

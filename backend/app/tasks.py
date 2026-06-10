@@ -1784,3 +1784,421 @@ def watermark_image_task(self, file_path: str, text: str, color: str = "gray", o
                     os.remove(path)
                 except Exception:
                     pass
+
+
+def _convert_docx_or_pptx_to_pdf(file_path: str, output_dir: str) -> str:
+    """
+    Converts a document (DOCX/PPTX) to PDF using LibreOffice headless mode.
+    Returns the path to the generated PDF.
+    """
+    soffice_cmd = None
+    if sys.platform == "win32":
+        paths = [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                soffice_cmd = p
+                break
+                
+    if not soffice_cmd:
+        for cmd in ["soffice", "libreoffice"]:
+            if shutil.which(cmd):
+                soffice_cmd = cmd
+                break
+                
+    if not soffice_cmd:
+        raise Exception("LibreOffice soffice command not found. Cannot perform document conversion.")
+        
+    cmd = [soffice_cmd, "--headless", "--convert-to", "pdf", "--outdir", output_dir, file_path]
+    logger.info(f"Running LibreOffice conversion command: {' '.join(cmd)}")
+    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    generated_pdf = os.path.join(output_dir, f"{base_name}.pdf")
+    if not os.path.exists(generated_pdf):
+        raise FileNotFoundError(f"LibreOffice execution completed, but output PDF was not found at {generated_pdf}")
+        
+    return generated_pdf
+
+
+@celery.task(bind=True)
+def merge_docx_task(self, file_paths: list[str], original_filename: str = None):
+    """
+    Combines multiple Word documents (.docx) into one file, uploads it, and cleans up.
+    """
+    logger.info(f"Starting DOCX merge task for files: {file_paths}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing DOCX merge..."})
+    
+    from docx import Document
+    
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    
+    resolved_paths = []
+    for fp in file_paths:
+        fp = fp.replace('\\', '/')
+        if not os.path.isabs(fp):
+            fp = os.path.abspath(os.path.join(backend_root, fp))
+        resolved_paths.append(fp)
+        
+    output_filename = f"merged_{uuid.uuid4()}.docx"
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    output_path = os.path.join(tmp_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Merging Word files..."})
+        
+        valid_paths = [fp for fp in resolved_paths if os.path.exists(fp)]
+        if not valid_paths:
+            raise Exception("No valid Word documents found to merge.")
+            
+        merged_document = Document(valid_paths[0])
+        
+        for fp in valid_paths[1:]:
+            merged_document.add_page_break()
+            sub_doc = Document(fp)
+            
+            for element in sub_doc.element.body:
+                if element.tag.endswith('sectPr'):
+                    continue
+                merged_document.element.body.append(element)
+                
+        merged_document.save(output_path)
+        
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving merged Word document..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext = os.path.splitext(original_filename)
+            original_name = f"{base}_merged{ext}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store merged Word document.")
+            
+        if not is_s3_configured():
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"DOCX merge task failed: {e}")
+        raise e
+    finally:
+        for fp in resolved_paths:
+            if fp and os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+
+
+@celery.task(bind=True)
+def docx_to_images_task(self, file_path: str, img_format: str, dpi: int, original_filename: str = None):
+    """
+    Converts a Word document (.docx) to PDF using LibreOffice, rasterizes PDF pages to images, packages them as ZIP, and uploads.
+    """
+    logger.info(f"Starting DOCX to image task. Format: {img_format}, DPI: {dpi}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Converting Word to PDF first..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    pdf_path = None
+    output_filename = ""
+    output_path = ""
+    
+    try:
+        pdf_path = _convert_docx_or_pptx_to_pdf(file_path, tmp_dir)
+        
+        self.update_state(state="PROGRESS", meta={"progress": 60, "message": "Rasterizing PDF pages to images..."})
+        
+        images = convert_from_path(pdf_path, dpi=dpi)
+        
+        if len(images) == 1:
+            output_filename = f"image_{uuid.uuid4()}.{img_format.lower()}"
+            output_path = os.path.join(tmp_dir, output_filename)
+            images[0].save(output_path, format=img_format.upper())
+            
+            original_name = None
+            if original_filename:
+                base, _ = os.path.splitext(original_filename)
+                original_name = f"{base}.{img_format.lower()}"
+        else:
+            output_filename = f"images_{uuid.uuid4()}.zip"
+            output_path = os.path.join(tmp_dir, output_filename)
+            with zipfile.ZipFile(output_path, "w") as zipf:
+                for idx, img in enumerate(images):
+                    img_name = f"page_{idx + 1}.{img_format.lower()}"
+                    temp_img_path = os.path.join(tmp_dir, img_name)
+                    img.save(temp_img_path, format=img_format.upper())
+                    zipf.write(temp_img_path, img_name)
+                    os.remove(temp_img_path)
+                    
+            original_name = None
+            if original_filename:
+                base, _ = os.path.splitext(original_filename)
+                original_name = f"{base}_images.zip"
+                
+        self.update_state(state="PROGRESS", meta={"progress": 85, "message": "Saving converted images..."})
+        
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store converted images ZIP.")
+            
+        if not is_s3_configured():
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"DOCX to Image conversion failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, pdf_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def pptx_to_pdf_task(self, file_path: str, original_filename: str = None):
+    """
+    Converts a PowerPoint presentation (.pptx) to PDF using LibreOffice, uploads, and cleans up.
+    """
+    logger.info(f"Starting PPTX to PDF task for {file_path}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing PPTX to PDF conversion..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    pdf_path = None
+    output_filename = f"converted_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(tmp_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 60, "message": "Converting presentation layout to PDF..."})
+        
+        generated_pdf = _convert_docx_or_pptx_to_pdf(file_path, tmp_dir)
+        shutil.move(generated_pdf, output_path)
+        
+        self.update_state(state="PROGRESS", meta={"progress": 85, "message": "Saving converted PDF..."})
+        
+        original_name = None
+        if original_filename:
+            base, _ = os.path.splitext(original_filename)
+            original_name = f"{base}.pdf"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store converted PDF file.")
+            
+        if not is_s3_configured():
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"PPTX to PDF conversion failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def pptx_to_images_task(self, file_path: str, img_format: str, dpi: int, original_filename: str = None):
+    """
+    Converts a PowerPoint presentation (.pptx) to PDF first, then rasterizes pages to images, packages, and uploads.
+    """
+    logger.info(f"Starting PPTX to images task for {file_path}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Converting PowerPoint to PDF first..."})
+    
+    file_path = _resolve_path(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    pdf_path = None
+    output_filename = ""
+    output_path = ""
+    
+    try:
+        pdf_path = _convert_docx_or_pptx_to_pdf(file_path, tmp_dir)
+        
+        self.update_state(state="PROGRESS", meta={"progress": 60, "message": "Rasterizing presentation slides to images..."})
+        
+        images = convert_from_path(pdf_path, dpi=dpi)
+        
+        if len(images) == 1:
+            output_filename = f"slide_{uuid.uuid4()}.{img_format.lower()}"
+            output_path = os.path.join(tmp_dir, output_filename)
+            images[0].save(output_path, format=img_format.upper())
+            
+            original_name = None
+            if original_filename:
+                base, _ = os.path.splitext(original_filename)
+                original_name = f"{base}.{img_format.lower()}"
+        else:
+            output_filename = f"slides_{uuid.uuid4()}.zip"
+            output_path = os.path.join(tmp_dir, output_filename)
+            with zipfile.ZipFile(output_path, "w") as zipf:
+                for idx, img in enumerate(images):
+                    img_name = f"slide_{idx + 1}.{img_format.lower()}"
+                    temp_img_path = os.path.join(tmp_dir, img_name)
+                    img.save(temp_img_path, format=img_format.upper())
+                    zipf.write(temp_img_path, img_name)
+                    os.remove(temp_img_path)
+                    
+            original_name = None
+            if original_filename:
+                base, _ = os.path.splitext(original_filename)
+                original_name = f"{base}_slides.zip"
+                
+        self.update_state(state="PROGRESS", meta={"progress": 85, "message": "Saving slide images..."})
+        
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store converted presentation slides.")
+            
+        if not is_s3_configured():
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"PPTX to images conversion failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, pdf_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+@celery.task(bind=True)
+def merge_pptx_task(self, file_paths: list[str], original_filename: str = None):
+    """
+    Combines multiple PowerPoint files (.pptx) into one slide deck, uploads it, and cleans up.
+    """
+    logger.info(f"Starting PPTX merge task for files: {file_paths}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing PPTX merge..."})
+    
+    from pptx import Presentation
+    import copy
+    
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    
+    resolved_paths = []
+    for fp in file_paths:
+        fp = fp.replace('\\', '/')
+        if not os.path.isabs(fp):
+            fp = os.path.abspath(os.path.join(backend_root, fp))
+        resolved_paths.append(fp)
+        
+    output_filename = f"merged_{uuid.uuid4()}.pptx"
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    output_path = os.path.join(tmp_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Merging presentation slides..."})
+        
+        valid_paths = [fp for fp in resolved_paths if os.path.exists(fp)]
+        if not valid_paths:
+            raise Exception("No valid PowerPoint files found to merge.")
+            
+        prs1 = Presentation(valid_paths[0])
+        
+        for fp in valid_paths[1:]:
+            prs2 = Presentation(fp)
+            
+            for slide in prs2.slides:
+                blank_layout = prs1.slide_layouts[6]
+                new_slide = prs1.slides.add_slide(blank_layout)
+                
+                for shape in slide.shapes:
+                    shape_el = copy.deepcopy(shape.element)
+                    new_slide.shapes._spTree.append(shape_el)
+                    
+        prs1.save(output_path)
+        
+        self.update_state(state="PROGRESS", meta={"progress": 80, "message": "Saving merged presentation..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext = os.path.splitext(original_filename)
+            original_name = f"{base}_merged{ext}"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store merged PowerPoint.")
+            
+        if not is_s3_configured():
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url
+        }
+    except Exception as e:
+        logger.error(f"PPTX merge task failed: {e}")
+        raise e
+    finally:
+        for fp in resolved_paths:
+            if fp and os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass

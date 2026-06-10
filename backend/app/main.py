@@ -27,7 +27,12 @@ from app.tasks import (
     crop_image_task,
     convert_image_task,
     rotate_image_task,
-    watermark_image_task
+    watermark_image_task,
+    merge_docx_task,
+    docx_to_images_task,
+    pptx_to_pdf_task,
+    pptx_to_images_task,
+    merge_pptx_task
 )
 from app.celery_app import celery
 
@@ -600,6 +605,156 @@ def watermark_image(
         raise HTTPException(status_code=400, detail="Invalid position specification.")
     _, relative_path = save_uploaded_image(file, "watermark")
     task = watermark_image_task.delay(relative_path, text, color, opacity, position, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+
+@app.post("/api/office/merge-docx", status_code=202)
+def merge_docx(
+    files: list[UploadFile] = File(...)
+):
+    if len(files) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 Word files are required to merge.")
+    for file in files:
+        if not file.filename.lower().endswith(".docx"):
+            raise HTTPException(status_code=400, detail=f"File {file.filename} is not a valid DOCX document.")
+            
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    saved_paths = []
+    try:
+        for file in files:
+            filename = f"upload_{uuid.uuid4()}.docx"
+            host_file_path = os.path.join(tmp_dir, filename)
+            with open(host_file_path, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+            saved_paths.append(os.path.join("tmp", filename))
+    except Exception as e:
+        for p in saved_paths:
+            abs_p = os.path.join(backend_root, p)
+            if os.path.exists(abs_p):
+                os.remove(abs_p)
+        raise HTTPException(status_code=500, detail=f"Failed to save upload files: {str(e)}")
+        
+    task = merge_docx_task.delay(saved_paths, original_filename=files[0].filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/office/docx-to-images", status_code=202)
+def docx_to_images(
+    file: UploadFile = File(...),
+    format: str = Form("png"),
+    dpi: int = Form(150)
+):
+    if not file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Only DOCX files are supported.")
+    if format.lower() not in ["png", "jpg", "jpeg"]:
+        raise HTTPException(status_code=400, detail="Invalid format preference. Choose PNG, JPG, or JPEG.")
+        
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    filename = f"upload_{uuid.uuid4()}.docx"
+    host_file_path = os.path.join(tmp_dir, filename)
+    
+    try:
+        with open(host_file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
+        
+    relative_path = os.path.join("tmp", filename)
+    task = docx_to_images_task.delay(relative_path, format, dpi, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/office/pptx-to-pdf", status_code=202)
+def pptx_to_pdf(
+    file: UploadFile = File(...)
+):
+    if not file.filename.lower().endswith(".pptx"):
+        raise HTTPException(status_code=400, detail="Only PPTX files are supported.")
+        
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    filename = f"upload_{uuid.uuid4()}.pptx"
+    host_file_path = os.path.join(tmp_dir, filename)
+    
+    try:
+        with open(host_file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
+        
+    relative_path = os.path.join("tmp", filename)
+    task = pptx_to_pdf_task.delay(relative_path, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/office/pptx-to-images", status_code=202)
+def pptx_to_images(
+    file: UploadFile = File(...),
+    format: str = Form("png"),
+    dpi: int = Form(150)
+):
+    if not file.filename.lower().endswith(".pptx"):
+        raise HTTPException(status_code=400, detail="Only PPTX files are supported.")
+    if format.lower() not in ["png", "jpg", "jpeg"]:
+        raise HTTPException(status_code=400, detail="Invalid format preference. Choose PNG, JPG, or JPEG.")
+        
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    filename = f"upload_{uuid.uuid4()}.pptx"
+    host_file_path = os.path.join(tmp_dir, filename)
+    
+    try:
+        with open(host_file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
+        
+    relative_path = os.path.join("tmp", filename)
+    task = pptx_to_images_task.delay(relative_path, format, dpi, original_filename=file.filename)
+    return {"job_id": task.id, "status": "queued"}
+
+@app.post("/api/office/merge-pptx", status_code=202)
+def merge_pptx(
+    files: list[UploadFile] = File(...)
+):
+    if len(files) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 PowerPoint files are required to merge.")
+    for file in files:
+        if not file.filename.lower().endswith(".pptx"):
+            raise HTTPException(status_code=400, detail=f"File {file.filename} is not a valid PPTX document.")
+            
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    saved_paths = []
+    try:
+        for file in files:
+            filename = f"upload_{uuid.uuid4()}.pptx"
+            host_file_path = os.path.join(tmp_dir, filename)
+            with open(host_file_path, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+            saved_paths.append(os.path.join("tmp", filename))
+    except Exception as e:
+        for p in saved_paths:
+            abs_p = os.path.join(backend_root, p)
+            if os.path.exists(abs_p):
+                os.remove(abs_p)
+        raise HTTPException(status_code=500, detail=f"Failed to save upload files: {str(e)}")
+        
+    task = merge_pptx_task.delay(saved_paths, original_filename=files[0].filename)
     return {"job_id": task.id, "status": "queued"}
 
 

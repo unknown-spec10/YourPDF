@@ -140,9 +140,9 @@ export default function Home() {
               <motion.div
                 key={cat.title}
                 variants={itemVariants}
-                className="flex flex-col p-6 rounded-2xl border border-card-border bg-surface relative overflow-hidden group hover:border-accent/50 transition-colors"
+                className="flex flex-col p-6 rounded-2xl border border-card-border/60 bg-surface/35 backdrop-blur-md relative overflow-hidden group hover:border-accent/30 hover:shadow-xl hover:shadow-accent/5 hover:-translate-y-1 transition-all duration-300"
               >
-                <div className={`mb-5 flex h-10 w-10 items-center justify-center rounded-lg ${cat.color}`}>
+                <div className={`mb-5 flex h-10 w-10 items-center justify-center rounded-xl shadow-sm ${cat.color}`}>
                   <Icon className="h-5 w-5" />
                 </div>
                 <h3 className="text-lg font-bold text-foreground mb-2">{cat.title}</h3>
@@ -163,8 +163,8 @@ export default function Home() {
       </section>
 
       {/* 3. How Privacy Works Section */}
-      <section className="mb-20 md:mb-32 rounded-3xl border border-card-border bg-surface/50 p-8 md:p-12 relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-transparent pointer-events-none" />
+      <section className="mb-20 md:mb-32 rounded-3xl border border-card-border/60 bg-surface/20 backdrop-blur-xl p-8 md:p-12 relative overflow-hidden shadow-xl shadow-black/5">
+        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-purple-500/5 pointer-events-none" />
         
         <div className="max-w-3xl mb-12">
           <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">
@@ -177,9 +177,9 @@ export default function Home() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 md:gap-12 relative z-10">
           {/* Client-Side Flow */}
-          <div className="flex flex-col justify-between p-6 rounded-2xl border border-card-border bg-background">
+          <div className="flex flex-col justify-between p-6 rounded-2xl border border-card-border/60 bg-surface/25 backdrop-blur-md shadow-sm">
             <div>
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-500 mb-4">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-500 mb-4 border border-emerald-500/10">
                 <Cpu className="h-3.5 w-3.5" />
                 <span>100% Client-Side Processing</span>
               </div>
@@ -190,26 +190,26 @@ export default function Home() {
             </div>
             
             {/* Diagram */}
-            <div className="flex items-center justify-between gap-2 border border-border rounded-xl p-4 bg-surface/40 text-xs text-center font-medium">
-              <div className="flex flex-col items-center gap-1 bg-surface border border-border p-2 rounded-lg w-[76px] sm:w-[90px]">
+            <div className="flex items-center justify-between gap-2 border border-border/40 rounded-xl p-4 bg-surface/20 text-xs text-center font-medium">
+              <div className="flex flex-col items-center gap-1 bg-surface/40 border border-border/30 p-2 rounded-lg w-[76px] sm:w-[90px] shadow-sm">
                 <span>📄 Your File</span>
               </div>
               <ArrowRight className="h-4 w-4 text-muted shrink-0" />
-              <div className="flex flex-col items-center gap-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-2 rounded-lg w-[88px] sm:w-[110px]">
+              <div className="flex flex-col items-center gap-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-2 rounded-lg w-[88px] sm:w-[110px] shadow-sm">
                 <Cpu className="h-4 w-4" />
                 <span>Your Browser</span>
               </div>
               <ArrowRight className="h-4 w-4 text-muted shrink-0" />
-              <div className="flex flex-col items-center gap-1 bg-surface border border-border p-2 rounded-lg w-[76px] sm:w-[90px]">
+              <div className="flex flex-col items-center gap-1 bg-surface/40 border border-border/30 p-2 rounded-lg w-[76px] sm:w-[90px] shadow-sm">
                 <span>⬇️ Download</span>
               </div>
             </div>
           </div>
 
           {/* Server-Side Flow */}
-          <div className="flex flex-col justify-between p-6 rounded-2xl border border-card-border bg-background">
+          <div className="flex flex-col justify-between p-6 rounded-2xl border border-card-border/60 bg-surface/25 backdrop-blur-md shadow-sm">
             <div>
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-semibold text-accent mb-4">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-semibold text-accent mb-4 border border-accent/10">
                 <Server className="h-3.5 w-3.5" />
                 <span>Secure Server-Side Processing</span>
               </div>
@@ -220,21 +220,21 @@ export default function Home() {
             </div>
             
             {/* Diagram */}
-            <div className="flex items-center justify-between gap-1 border border-border rounded-xl p-4 bg-surface/40 text-[10px] sm:text-xs text-center font-medium">
-              <div className="flex flex-col items-center gap-1 bg-surface border border-border p-2 rounded-lg w-[60px] sm:w-[80px]">
+            <div className="flex items-center justify-between gap-1 border border-border/40 rounded-xl p-4 bg-surface/20 text-[10px] sm:text-xs text-center font-medium">
+              <div className="flex flex-col items-center gap-1 bg-surface/40 border border-border/30 p-2 rounded-lg w-[60px] sm:w-[80px] shadow-sm">
                 <span>📄 File</span>
               </div>
               <ArrowRight className="h-4 w-4 text-muted shrink-0" />
-              <div className="flex flex-col items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 text-accent p-2 rounded-lg w-[70px] sm:w-[95px]">
+              <div className="flex flex-col items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 text-accent p-2 rounded-lg w-[70px] sm:w-[95px] shadow-sm">
                 <Server className="h-4 w-4" />
                 <span>Worker App</span>
               </div>
               <ArrowRight className="h-4 w-4 text-muted shrink-0" />
-              <div className="flex flex-col items-center gap-1 bg-rose-500/10 border border-rose-500/20 text-rose-500 p-2 rounded-lg w-[70px] sm:w-[95px]">
+              <div className="flex flex-col items-center gap-1 bg-rose-500/10 border border-rose-500/20 text-rose-500 p-2 rounded-lg w-[70px] sm:w-[95px] shadow-sm">
                 <span>🗑️ Auto-delete</span>
               </div>
               <ArrowRight className="h-4 w-4 text-muted shrink-0" />
-              <div className="flex flex-col items-center gap-1 bg-surface border border-border p-2 rounded-lg w-[60px] sm:w-[80px]">
+              <div className="flex flex-col items-center gap-1 bg-surface/40 border border-border/30 p-2 rounded-lg w-[60px] sm:w-[80px] shadow-sm">
                 <span>⬇️ Result</span>
               </div>
             </div>

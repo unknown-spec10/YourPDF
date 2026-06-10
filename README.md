@@ -20,6 +20,13 @@ YourPDF is a production-grade, privacy-first, open-source PDF and image processi
 - **Rotate Image**: Perform 90, 180, or 270 degrees transpositions.
 - **Watermark Image**: Stamp custom text overlays at multiple positions.
 
+### Office Utilities
+- **Merge Word**: Combine multiple Word documents (.docx) into a single document.
+- **Word to Images**: Convert Word pages (.docx) into individual PNG or JPG images.
+- **PPT to PDF**: Convert PowerPoint (.pptx) presentations to high-quality PDF files.
+- **PPT to Images**: Convert PowerPoint slides (.pptx) into individual PNG or JPG images.
+- **Merge PPT**: Combine multiple PowerPoint presentation slide decks (.pptx) into one.
+
 ## Repository Layout
 
 ```

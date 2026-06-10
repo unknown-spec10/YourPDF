@@ -33,23 +33,23 @@ export default function PdfPreviewModal({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="absolute inset-0 bg-black/75 backdrop-blur-md cursor-pointer"
+            className="absolute inset-0 bg-black/60 backdrop-blur-xl cursor-pointer"
           />
 
           {/* Modal Container */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 15 }}
+            initial={{ opacity: 0, scale: 0.96, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 15 }}
-            transition={{ type: 'spring', duration: 0.4 }}
-            className={`relative flex flex-col border border-card-border bg-surface shadow-2xl rounded-2xl overflow-hidden transition-all duration-300 z-10 ${
+            exit={{ opacity: 0, scale: 0.96, y: 20 }}
+            transition={{ type: 'spring', duration: 0.45 }}
+            className={`relative flex flex-col border border-card-border/60 bg-surface/75 backdrop-blur-xl shadow-2xl rounded-2xl overflow-hidden transition-all duration-300 z-10 ${
               isFullscreen ? 'w-full h-full max-w-none max-h-none rounded-none border-0' : 'w-full max-w-5xl h-[85vh]'
             }`}
           >
             {/* Header / Title Bar */}
-            <div className="flex h-14 items-center justify-between border-b border-border bg-background/50 px-4 sm:px-6">
+            <div className="flex h-14 items-center justify-between border-b border-border/40 bg-surface/50 px-4 sm:px-6">
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent shadow-inner">
                   <Eye className="h-4 w-4" />
                 </div>
                 <h3 className="truncate text-sm font-bold text-foreground">
@@ -62,7 +62,7 @@ export default function PdfPreviewModal({
                 <button
                   onClick={toggleFullscreen}
                   title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted hover:text-foreground hover:bg-background transition-colors cursor-pointer"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
                 >
                   {isFullscreen ? (
                     <Minimize2 className="h-4 w-4" />
@@ -73,7 +73,7 @@ export default function PdfPreviewModal({
                 <button
                   onClick={onClose}
                   title="Close Preview"
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted hover:text-foreground hover:bg-background transition-colors cursor-pointer"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
                 >
                   <X className="h-4 w-4" />
                 </button>

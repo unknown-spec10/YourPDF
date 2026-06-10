@@ -70,21 +70,17 @@ def test_generate_presigned_download_url_no_bucket(mock_settings, mock_get_clien
 @patch("app.s3.settings")
 def test_is_s3_configured_true(mock_settings):
     """
-    Verify is_s3_configured returns True if all AWS credentials are set.
+    Verify is_s3_configured returns True if S3 bucket name is set.
     """
-    mock_settings.aws_access_key_id = "AKIAEXAMPLE"
-    mock_settings.aws_secret_access_key = "AWSSECRET"
     mock_settings.aws_s3_bucket_name = "my-bucket"
     assert is_s3_configured() is True
 
 @patch("app.s3.settings")
 def test_is_s3_configured_false(mock_settings):
     """
-    Verify is_s3_configured returns False if any AWS credentials are missing.
+    Verify is_s3_configured returns False if S3 bucket name is missing.
     """
-    mock_settings.aws_access_key_id = None
-    mock_settings.aws_secret_access_key = "AWSSECRET"
-    mock_settings.aws_s3_bucket_name = "my-bucket"
+    mock_settings.aws_s3_bucket_name = None
     assert is_s3_configured() is False
 
 @patch("app.s3.generate_presigned_download_url")

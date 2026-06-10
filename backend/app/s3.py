@@ -11,13 +11,14 @@ logger = logging.getLogger(__name__)
 def get_s3_client():
     """
     Creates and returns a boto3 S3 client using settings.
+    Uses credentials if provided, otherwise falls back to IAM Role / default chain.
     """
-    return boto3.client(
-        "s3",
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
-        region_name=settings.aws_region
-    )
+    kwargs = {"region_name": settings.aws_region}
+    if settings.aws_access_key_id:
+        kwargs["aws_access_key_id"] = settings.aws_access_key_id
+    if settings.aws_secret_access_key:
+        kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
+    return boto3.client("s3", **kwargs)
 
 def upload_file_to_s3(local_path: str, s3_key: str) -> bool:
     """
@@ -63,13 +64,10 @@ def generate_presigned_download_url(s3_key: str, expiration: int = 900, original
 
 def is_s3_configured() -> bool:
     """
-    Checks if S3 credentials and bucket name are fully configured in settings.
+    Checks if S3 bucket name is configured in settings.
+    Authentication is resolved dynamically by boto3 (credentials or EC2 IAM Role).
     """
-    return bool(
-        settings.aws_access_key_id and
-        settings.aws_secret_access_key and
-        settings.aws_s3_bucket_name
-    )
+    return bool(settings.aws_s3_bucket_name)
 
 def store_processed_file(local_path: str, filename: str, original_name: str = None) -> Optional[str]:
     """

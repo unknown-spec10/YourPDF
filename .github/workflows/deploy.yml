@@ -120,6 +120,8 @@ jobs:
           port: 22
           script: |
             mkdir -p ${{ secrets.EC2_DEPLOY_DIR }}
+            sudo chown -R ${{ secrets.EC2_USERNAME }}:${{ secrets.EC2_USERNAME }} ${{ secrets.EC2_DEPLOY_DIR }} || true
+            sudo chmod -R 755 ${{ secrets.EC2_DEPLOY_DIR }} || true
 
       - name: Copy docker-compose.prod.yml to EC2
         uses: appleboy/scp-action@v0.1.7

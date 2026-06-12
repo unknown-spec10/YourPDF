@@ -88,16 +88,16 @@ def test_is_s3_configured_false(mock_settings):
 @patch("app.s3.is_s3_configured")
 def test_store_processed_file_s3_mode(mock_is_s3, mock_upload, mock_presign):
     """
-    Verify store_processed_file uploads to S3 and returns S3 presigned URL when S3 is configured.
+    Verify store_processed_file uploads to S3 and returns local fallback URL when S3 is configured.
     """
     mock_is_s3.return_value = True
     mock_upload.return_value = True
     mock_presign.return_value = "https://s3-link.com"
     
     url = store_processed_file("dummy.pdf", "output.pdf")
-    assert url == "https://s3-link.com"
+    assert url == "/api/download/output.pdf"
     mock_upload.assert_called_once_with("dummy.pdf", "outputs/output.pdf")
-    mock_presign.assert_called_once_with("outputs/output.pdf", original_name=None)
+    mock_presign.assert_not_called()
 
 @patch("app.s3.shutil.copy2")
 @patch("app.s3.os.makedirs")

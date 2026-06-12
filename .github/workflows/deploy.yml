@@ -131,6 +131,7 @@ jobs:
           source: "docker-compose.prod.yml"
           target: ${{ secrets.EC2_DEPLOY_DIR }}
           strip_components: 0
+          overwrite: true
 
       - name: Execute deployment commands via SSH
         uses: appleboy/ssh-action@v1.0.3

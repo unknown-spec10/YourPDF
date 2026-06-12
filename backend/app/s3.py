@@ -78,9 +78,10 @@ def store_processed_file(local_path: str, filename: str, original_name: str = No
     if is_s3_configured():
         s3_key = f"outputs/{filename}"
         if upload_file_to_s3(local_path, s3_key):
-            url = generate_presigned_download_url(s3_key, original_name=original_name)
-            if url:
-                return url
+            import urllib.parse
+            if original_name:
+                return f"/api/download/{filename}?original_name={urllib.parse.quote(original_name)}"
+            return f"/api/download/{filename}"
         logger.warning("S3 upload failed, falling back to local storage.")
         
     # Local Storage Fallback Mode

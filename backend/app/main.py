@@ -809,6 +809,37 @@ def download_file(filename: str, original_name: str = None, preview: bool = Fals
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename.")
         
+    from app.s3 import is_s3_configured
+    if is_s3_configured():
+        from app.s3 import get_s3_client
+        from app.config import settings
+        from fastapi.responses import RedirectResponse
+        import logging
+        
+        s3_key = f"outputs/{filename}"
+        download_filename = original_name if original_name else filename
+        
+        if preview:
+            disposition = "inline"
+        else:
+            disposition = f"attachment; filename={download_filename}"
+            
+        try:
+            s3_client = get_s3_client()
+            presigned_url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": settings.aws_s3_bucket_name,
+                    "Key": s3_key,
+                    "ResponseContentDisposition": disposition
+                },
+                ExpiresIn=900
+            )
+            return RedirectResponse(url=presigned_url)
+        except Exception as e:
+            # Log failure and let it fall back to local disk (if file exists locally)
+            logging.getLogger(__name__).error(f"Failed to generate S3 presigned redirect for {filename}: {e}")
+            
     app_dir = os.path.dirname(os.path.abspath(__file__))
     backend_root = os.path.dirname(app_dir)
     file_path = os.path.join(backend_root, "static", "outputs", filename)

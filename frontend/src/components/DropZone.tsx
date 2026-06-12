@@ -65,7 +65,7 @@ export default function DropZone({
             : '0 10px 30px -10px rgba(0, 0, 0, 0.15)',
         }}
         transition={{ duration: 0.25, ease: 'easeOut' }}
-        className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-12 text-center backdrop-blur-lg transition-all relative overflow-hidden ${
+        className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-6 sm:p-12 text-center backdrop-blur-lg transition-all relative overflow-hidden ${
           disabled ? 'opacity-50 cursor-not-allowed' : 'hover:border-accent'
         }`}
       >

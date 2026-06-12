@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Maximize2, Minimize2, Eye } from 'lucide-react'
+import { X, Maximize2, Minimize2, Eye, ExternalLink } from 'lucide-react'
 
 interface PdfPreviewModalProps {
   isOpen: boolean
@@ -26,7 +26,7 @@ export default function PdfPreviewModal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-0 md:p-6 overflow-hidden">
           {/* Backdrop Blur */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -42,8 +42,10 @@ export default function PdfPreviewModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 20 }}
             transition={{ type: 'spring', duration: 0.45 }}
-            className={`relative flex flex-col border border-card-border/60 bg-surface/75 backdrop-blur-xl shadow-2xl rounded-2xl overflow-hidden transition-all duration-300 z-10 ${
-              isFullscreen ? 'w-full h-full max-w-none max-h-none rounded-none border-0' : 'w-full max-w-5xl h-[85vh]'
+            className={`relative flex flex-col border bg-surface/75 backdrop-blur-xl shadow-2xl transition-all duration-300 z-10 ${
+              isFullscreen 
+                ? 'w-full h-full max-w-none max-h-none rounded-none border-0' 
+                : 'w-full h-full md:h-[85vh] md:max-w-5xl rounded-none md:rounded-2xl border-0 md:border border-card-border/60'
             }`}
           >
             {/* Header / Title Bar */}
@@ -59,10 +61,19 @@ export default function PdfPreviewModal({
 
               {/* Window Controls */}
               <div className="flex items-center gap-2">
+                <a
+                  href={pdfUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open PDF in native browser tab"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
                 <button
                   onClick={toggleFullscreen}
                   title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
+                  className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
                 >
                   {isFullscreen ? (
                     <Minimize2 className="h-4 w-4" />
@@ -81,11 +92,11 @@ export default function PdfPreviewModal({
             </div>
 
             {/* Frame Viewport Container */}
-            <div className="flex-1 bg-background p-2 sm:p-4">
+            <div className="flex-1 bg-background p-2 md:p-4">
               {pdfUrl ? (
                 <iframe
                   src={`${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}preview=true#toolbar=1`}
-                  className="w-full h-full border-0 rounded-xl bg-zinc-900 shadow-inner"
+                  className="w-full h-full border-0 rounded-none md:rounded-xl bg-zinc-900 shadow-inner"
                   title="PDF Document Preview"
                 />
               ) : (

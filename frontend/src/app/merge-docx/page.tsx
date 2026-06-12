@@ -228,7 +228,7 @@ export default function MergeDocxPage() {
                     <h3 className="text-2xl font-bold">Word Documents Merged!</h3>
                     <p className="text-sm text-muted mt-1">Your combined DOCX file is ready. Click below to download.</p>
                   </div>
-                  <div className="flex gap-4 mt-4">
+                  <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
                       href={
                         jobStatus.result.download_url.startsWith('http')

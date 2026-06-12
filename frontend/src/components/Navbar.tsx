@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Sun, Moon, FileSpreadsheet } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { Sun, Moon, FileSpreadsheet, Menu, X } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useAppStore } from '@/lib/store'
 
 function GithubIcon({ className }: { className?: string }) {
@@ -29,6 +29,7 @@ export default function Navbar() {
   const pathname = usePathname()
   const { theme, toggleTheme, setTheme } = useAppStore()
   const [mounted, setMounted] = useState(false)
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
 
   // Avoid hydration mismatch by waiting until mounted on client
   useEffect(() => {
@@ -46,6 +47,11 @@ export default function Navbar() {
       document.documentElement.classList.add('dark')
     }
   }, [setTheme])
+
+  // Close mobile menu when pathname changes
+  useEffect(() => {
+    setIsMobileMenuOpen(false)
+  }, [pathname])
 
   const navLinks = [
     { name: 'All Tools', href: '/tools' },
@@ -65,7 +71,7 @@ export default function Navbar() {
           </span>
         </Link>
 
-        {/* Navigation */}
+        {/* Navigation (Desktop) */}
         <nav className="hidden md:flex items-center gap-8 text-sm font-medium">
           {navLinks.map((link) => {
             const isActive = pathname === link.href
@@ -96,7 +102,7 @@ export default function Navbar() {
             href="https://github.com"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted hover:bg-surface hover:text-foreground transition-all duration-200"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:bg-surface hover:text-foreground transition-all duration-200"
             title="View source on GitHub"
           >
             <GithubIcon className="h-5 w-5" />
@@ -105,7 +111,7 @@ export default function Navbar() {
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted hover:bg-surface hover:text-foreground transition-all duration-200 cursor-pointer"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:bg-surface hover:text-foreground transition-all duration-200 cursor-pointer"
             aria-label="Toggle theme"
           >
             {mounted && theme === 'dark' ? (
@@ -114,8 +120,51 @@ export default function Navbar() {
               <Moon className="h-5 w-5" />
             )}
           </button>
+
+          {/* Mobile Menu Toggle */}
+          <button
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:bg-surface hover:text-foreground transition-all duration-200 cursor-pointer md:hidden"
+            aria-label="Toggle mobile menu"
+          >
+            {isMobileMenuOpen ? (
+              <X className="h-5 w-5" />
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
+          </button>
         </div>
       </div>
+
+      {/* Mobile Menu Dropdown */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            className="border-t border-border/40 bg-surface/90 backdrop-blur-xl md:hidden overflow-hidden"
+          >
+            <nav className="flex flex-col px-6 py-4 gap-4 text-base font-semibold">
+              {navLinks.map((link) => {
+                const isActive = pathname === link.href
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    className={`py-2 transition-colors duration-200 hover:text-accent ${
+                      isActive ? 'text-accent' : 'text-muted'
+                    }`}
+                  >
+                    {link.name}
+                  </Link>
+                )
+              })}
+            </nav>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </header>
   )
 }

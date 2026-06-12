@@ -191,7 +191,7 @@ export default function ConvertImagePage() {
                       Your image is ready in the new format. Click download to retrieve it.
                     </p>
                   </div>
-                  <div className="flex gap-4 mt-4">
+                  <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
                       href={
                         jobStatus.result.download_url.startsWith('http')

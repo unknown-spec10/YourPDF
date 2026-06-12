@@ -7,7 +7,7 @@ services:
     restart: always
 
   backend:
-    image: unknowndockerishere/yourpdf-backend:latest
+    image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-backend:latest
     container_name: yourpdf-prod-backend
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     volumes:
@@ -22,7 +22,7 @@ services:
     restart: always
 
   celery_worker:
-    image: unknowndockerishere/yourpdf-backend:latest
+    image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-backend:latest
     container_name: yourpdf-prod-celery-worker
     command: celery -A app.celery_app.celery worker --loglevel=info
     volumes:
@@ -37,12 +37,12 @@ services:
     restart: always
 
   frontend:
-    image: unknowndockerishere/yourpdf-frontend:latest
+    image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-frontend:latest
     container_name: yourpdf-prod-frontend
     restart: always
 
   nginx:
-    image: unknowndockerishere/yourpdf-nginx:latest
+    image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-nginx:latest
     container_name: yourpdf-prod-nginx
     ports:
       - "80:80"

@@ -359,7 +359,7 @@ export default function OrganizePage() {
                       Your reorganized PDF file is ready. Click below to download.
                     </p>
                   </div>
-                  <div className="flex gap-4 mt-4">
+                  <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
                       href={
                         jobStatus.result.download_url.startsWith('http')

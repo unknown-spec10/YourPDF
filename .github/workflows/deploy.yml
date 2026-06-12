@@ -82,8 +82,8 @@ jobs:
           context: ./backend
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/yourpdf-backend:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
 
       - name: Build and Push Frontend Image
         uses: docker/build-push-action@v5
@@ -91,8 +91,8 @@ jobs:
           context: ./frontend
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/yourpdf-frontend:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
 
       - name: Build and Push Nginx Image
         uses: docker/build-push-action@v5
@@ -100,8 +100,8 @@ jobs:
           context: ./nginx
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/yourpdf-nginx:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=nginx
+          cache-to: type=gha,mode=max,scope=nginx
 
   deploy:
     name: Deploy to EC2
@@ -144,7 +144,6 @@ jobs:
           port: 22
           script: |
             cd ${{ secrets.EC2_DEPLOY_DIR }}
-            export DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d --force-recreate
-            docker image prune -f
+            sudo DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}" docker compose -f docker-compose.prod.yml pull
+            sudo DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}" docker compose -f docker-compose.prod.yml up -d --force-recreate
+            sudo docker image prune -f

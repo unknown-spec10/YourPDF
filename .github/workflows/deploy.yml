@@ -144,6 +144,9 @@ jobs:
           port: 22
           script: |
             cd ${{ secrets.EC2_DEPLOY_DIR }}
+            # Free up disk space before pulling new large images
+            sudo docker image prune -f
+            sudo docker system prune -f
             sudo DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}" docker compose -f docker-compose.prod.yml pull
             sudo DOCKERHUB_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}" docker compose -f docker-compose.prod.yml up -d --force-recreate
-            sudo docker image prune -f
+            sudo docker image prune -a -f

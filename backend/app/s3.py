@@ -81,6 +81,23 @@ def is_s3_configured() -> bool:
     """
     return bool(settings.aws_s3_bucket_name)
 
+def delete_s3_object_from_key(s3_key: str) -> bool:
+    """
+    Deletes an object from the S3 bucket using its key.
+    """
+    if not settings.aws_s3_bucket_name:
+        logger.error("AWS S3 bucket name is not configured.")
+        return False
+        
+    s3_client = get_s3_client()
+    try:
+        s3_client.delete_object(Bucket=settings.aws_s3_bucket_name, Key=s3_key)
+        logger.info(f"Successfully deleted S3 object {s3_key} from bucket {settings.aws_s3_bucket_name}")
+        return True
+    except ClientError as e:
+        logger.error(f"Failed to delete S3 object {s3_key}: {e}")
+        return False
+
 def store_processed_file(local_path: str, filename: str, original_name: str = None) -> Optional[str]:
     """
     Stores the processed PDF file.
@@ -90,6 +107,14 @@ def store_processed_file(local_path: str, filename: str, original_name: str = No
     if is_s3_configured():
         s3_key = f"outputs/{filename}"
         if upload_file_to_s3(local_path, s3_key):
+            # Schedule S3 object deletion in 15 minutes (900 seconds)
+            try:
+                from app.tasks import delete_s3_file_task
+                delete_s3_file_task.apply_async((s3_key,), countdown=900)
+                logger.info(f"Scheduled S3 auto-cleanup for key {s3_key} in 15 minutes.")
+            except Exception as e:
+                logger.error(f"Failed to schedule S3 auto-cleanup for key {s3_key}: {e}")
+                
             import urllib.parse
             if original_name:
                 return f"/api/download/{filename}?original_name={urllib.parse.quote(original_name)}"

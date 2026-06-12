@@ -27,6 +27,14 @@ def delete_local_file_task(file_path: str):
         except Exception as e:
             logger.error(f"Failed to delete local fallback file {file_path}: {e}")
 
+@celery.task
+def delete_s3_file_task(s3_key: str):
+    """
+    Background task to clean up S3 objects after the expiry period (15 minutes).
+    """
+    from app.s3 import delete_s3_object_from_key
+    delete_s3_object_from_key(s3_key)
+
 @celery.task(bind=True)
 def compress_pdf_task(self, file_path: str, quality: str, original_filename: str = None):
     """

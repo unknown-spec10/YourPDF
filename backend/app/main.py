@@ -62,11 +62,22 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 def health_check():
     return {"status": "ok", "service": "yourpdf-backend"}
 
+def validate_file_size(file: UploadFile, max_size_mb: int = 50):
+    max_size_bytes = max_size_mb * 1024 * 1024
+    file.file.seek(0, os.SEEK_END)
+    size = file.file.tell()
+    file.file.seek(0)
+    if size > max_size_bytes:
+        raise HTTPException(status_code=400, detail=f"File size exceeds the maximum limit of {max_size_mb}MB.")
+
 @app.post("/api/compress", status_code=202)
 def compress_pdf(
     file: UploadFile = File(...),
     quality: str = Form("medium")
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     # Validate file type
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
@@ -99,6 +110,10 @@ def merge_pdfs(
 ):
     if len(files) < 2:
         raise HTTPException(status_code=400, detail="At least 2 PDF files are required to merge.")
+        
+    # Validate file size
+    for file in files:
+        validate_file_size(file, 50)
         
     # Validate PDF extensions
     for file in files:
@@ -133,6 +148,9 @@ def split_pdf(
     mode: str = Form("custom"),
     pages_spec: str = Form("")
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -162,6 +180,9 @@ def pdf_to_images(
     format: str = Form("png"),
     dpi: int = Form(150)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -189,6 +210,10 @@ def pdf_to_images(
 def images_to_pdf(
     files: list[UploadFile] = File(...)
 ):
+    # Validate file size
+    for file in files:
+        validate_file_size(file, 50)
+        
     valid_exts = [".png", ".jpg", ".jpeg"]
     for file in files:
         ext = os.path.splitext(file.filename.lower())[1]
@@ -223,6 +248,9 @@ def extract_text(
     file: UploadFile = File(...),
     export_txt: bool = Form(False)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -247,6 +275,9 @@ def extract_text(
 def pdf_to_docx(
     file: UploadFile = File(...)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -272,6 +303,9 @@ def pdf_to_docx(
 def docx_to_pdf(
     file: UploadFile = File(...)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only DOCX files are supported.")
         
@@ -299,6 +333,9 @@ def protect_pdf(
     file: UploadFile = File(...),
     password: str = Form(...)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -325,6 +362,9 @@ def unlock_pdf(
     file: UploadFile = File(...),
     password: str = Form(...)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -351,6 +391,9 @@ def rotate_pdf(
     file: UploadFile = File(...),
     rotation: int = Form(...)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -380,6 +423,9 @@ def organize_pdf(
     file: UploadFile = File(...),
     page_order: str = Form(...)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -412,6 +458,9 @@ def watermark_pdf(
     opacity: float = Form(0.3),
     rotation: int = Form(45)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -438,6 +487,9 @@ def add_page_numbers(
     file: UploadFile = File(...),
     position: str = Form("bottom-center")
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -464,6 +516,9 @@ def ocr_pdf(
     file: UploadFile = File(...),
     language: str = Form("eng")
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         
@@ -487,6 +542,9 @@ def ocr_pdf(
 
 @app.post("/api/pdf-info")
 def get_pdf_info(file: UploadFile = File(...)):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
     try:
@@ -501,6 +559,9 @@ def get_pdf_info(file: UploadFile = File(...)):
 
 
 def validate_image_file(file: UploadFile):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     ext = os.path.splitext(file.filename.lower())[1]
     if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
         raise HTTPException(status_code=400, detail="Only JPG, JPEG, PNG, and WEBP image files are supported.")
@@ -614,6 +675,9 @@ def merge_docx(
 ):
     if len(files) < 2:
         raise HTTPException(status_code=400, detail="At least 2 Word files are required to merge.")
+    # Validate file size
+    for file in files:
+        validate_file_size(file, 50)
     for file in files:
         if not file.filename.lower().endswith(".docx"):
             raise HTTPException(status_code=400, detail=f"File {file.filename} is not a valid DOCX document.")
@@ -647,6 +711,9 @@ def docx_to_images(
     format: str = Form("png"),
     dpi: int = Form(150)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only DOCX files are supported.")
     if format.lower() not in ["png", "jpg", "jpeg"]:
@@ -674,6 +741,9 @@ def docx_to_images(
 def pptx_to_pdf(
     file: UploadFile = File(...)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pptx"):
         raise HTTPException(status_code=400, detail="Only PPTX files are supported.")
         
@@ -701,6 +771,9 @@ def pptx_to_images(
     format: str = Form("png"),
     dpi: int = Form(150)
 ):
+    # Validate file size
+    validate_file_size(file, 50)
+    
     if not file.filename.lower().endswith(".pptx"):
         raise HTTPException(status_code=400, detail="Only PPTX files are supported.")
     if format.lower() not in ["png", "jpg", "jpeg"]:
@@ -730,6 +803,9 @@ def merge_pptx(
 ):
     if len(files) < 2:
         raise HTTPException(status_code=400, detail="At least 2 PowerPoint files are required to merge.")
+    # Validate file size
+    for file in files:
+        validate_file_size(file, 50)
     for file in files:
         if not file.filename.lower().endswith(".pptx"):
             raise HTTPException(status_code=400, detail=f"File {file.filename} is not a valid PPTX document.")

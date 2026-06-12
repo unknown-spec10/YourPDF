@@ -9,6 +9,16 @@ def test_health_check(client):
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "yourpdf-backend"}
 
+def test_file_size_exceeded(client):
+    """
+    Test that uploading a file larger than 50MB results in a 400 bad request error.
+    """
+    large_data = b"0" * (51 * 1024 * 1024)
+    files = {"file": ("large.pdf", large_data, "application/pdf")}
+    response = client.post("/api/compress", files=files, data={"quality": "low"})
+    assert response.status_code == 400
+    assert "exceeds the maximum limit" in response.json()["detail"]
+
 def test_compress_invalid_extension(client):
     """
     Test that uploading a non-PDF file results in a 400 bad request error.

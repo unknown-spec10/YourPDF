@@ -88,12 +88,14 @@ def test_is_s3_configured_false(mock_settings):
     mock_settings.aws_s3_bucket_name = None
     assert is_s3_configured() is False
 
+@patch("app.tasks.delete_s3_file_task")
 @patch("app.s3.generate_presigned_download_url")
 @patch("app.s3.upload_file_to_s3")
 @patch("app.s3.is_s3_configured")
-def test_store_processed_file_s3_mode(mock_is_s3, mock_upload, mock_presign):
+def test_store_processed_file_s3_mode(mock_is_s3, mock_upload, mock_presign, mock_delete_task):
     """
-    Verify store_processed_file uploads to S3 and returns local fallback URL when S3 is configured.
+    Verify store_processed_file uploads to S3 and returns local fallback URL when S3 is configured,
+    and schedules S3 cleanup task.
     """
     mock_is_s3.return_value = True
     mock_upload.return_value = True
@@ -102,6 +104,7 @@ def test_store_processed_file_s3_mode(mock_is_s3, mock_upload, mock_presign):
     url = store_processed_file("dummy.pdf", "output.pdf")
     assert url == "/api/download/output.pdf"
     mock_upload.assert_called_once_with("dummy.pdf", "outputs/output.pdf")
+    mock_delete_task.apply_async.assert_called_once_with(("outputs/output.pdf",), countdown=900)
     mock_presign.assert_not_called()
 
 @patch("app.s3.shutil.copy2")
@@ -116,3 +119,18 @@ def test_store_processed_file_local_mode(mock_is_s3, mock_makedirs, mock_copy2):
     url = store_processed_file("dummy.pdf", "output.pdf")
     assert url == "/api/download/output.pdf"
     mock_copy2.assert_called_once()
+
+@patch("app.s3.get_s3_client")
+@patch("app.s3.settings")
+def test_delete_s3_object_from_key_success(mock_settings, mock_get_client):
+    """
+    Verify delete_s3_object_from_key calls delete_object with correct parameters.
+    """
+    mock_settings.aws_s3_bucket_name = "test-bucket"
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    
+    from app.s3 import delete_s3_object_from_key
+    res = delete_s3_object_from_key("outputs/test.pdf")
+    assert res is True
+    mock_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key="outputs/test.pdf")

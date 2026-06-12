@@ -20,6 +20,8 @@ def get_s3_client():
         kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
     return boto3.client("s3", **kwargs)
 
+import mimetypes
+
 def upload_file_to_s3(local_path: str, s3_key: str) -> bool:
     """
     Uploads a local file to the configured S3 bucket.
@@ -30,8 +32,18 @@ def upload_file_to_s3(local_path: str, s3_key: str) -> bool:
     
     s3_client = get_s3_client()
     try:
-        s3_client.upload_file(local_path, settings.aws_s3_bucket_name, s3_key)
-        logger.info(f"Successfully uploaded {local_path} to S3 key {s3_key}")
+        content_type, _ = mimetypes.guess_type(local_path)
+        if not content_type:
+            content_type = "application/octet-stream"
+            
+        extra_args = {"ContentType": content_type}
+        s3_client.upload_file(
+            local_path, 
+            settings.aws_s3_bucket_name, 
+            s3_key,
+            ExtraArgs=extra_args
+        )
+        logger.info(f"Successfully uploaded {local_path} to S3 key {s3_key} with ContentType {content_type}")
         return True
     except ClientError as e:
         logger.error(f"Failed to upload file to S3: {e}")

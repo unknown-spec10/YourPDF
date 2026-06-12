@@ -826,13 +826,26 @@ def download_file(filename: str, original_name: str = None, preview: bool = Fals
             
         try:
             s3_client = get_s3_client()
+            params = {
+                "Bucket": settings.aws_s3_bucket_name,
+                "Key": s3_key,
+                "ResponseContentDisposition": disposition
+            }
+            if preview:
+                ext = os.path.splitext(filename.lower())[1]
+                media_types = {
+                    ".pdf": "application/pdf",
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".txt": "text/plain",
+                }
+                mimetype = media_types.get(ext, "application/octet-stream")
+                params["ResponseContentType"] = mimetype
+                
             presigned_url = s3_client.generate_presigned_url(
                 "get_object",
-                Params={
-                    "Bucket": settings.aws_s3_bucket_name,
-                    "Key": s3_key,
-                    "ResponseContentDisposition": disposition
-                },
+                Params=params,
                 ExpiresIn=900
             )
             return RedirectResponse(url=presigned_url)

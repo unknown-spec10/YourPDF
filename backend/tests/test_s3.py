@@ -20,7 +20,12 @@ def test_upload_file_to_s3_success(mock_settings, mock_get_client):
     result = upload_file_to_s3("local_path.pdf", "s3_key.pdf")
     
     assert result is True
-    mock_client.upload_file.assert_called_once_with("local_path.pdf", "test-bucket", "s3_key.pdf")
+    mock_client.upload_file.assert_called_once_with(
+        "local_path.pdf", 
+        "test-bucket", 
+        "s3_key.pdf",
+        ExtraArgs={"ContentType": "application/pdf"}
+    )
 
 @patch("app.s3.get_s3_client")
 @patch("app.s3.settings")

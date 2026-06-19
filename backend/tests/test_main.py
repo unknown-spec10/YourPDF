@@ -450,3 +450,32 @@ def test_merge_pptx_success(mock_delay, mock_open, mock_copy, client):
     assert response.json()["job_id"] == "mocked-merge-pptx-123"
     mock_delay.assert_called_once()
     assert response.json()["status"] == "queued"
+
+
+@patch("app.tasks.os.path.exists")
+@patch("app.tasks.img2pdf.convert")
+@patch("app.tasks.open")
+@patch("app.tasks.store_processed_file")
+@patch("app.tasks.is_s3_configured")
+def test_images_to_pdf_task_execution(mock_s3_configured, mock_store, mock_open, mock_convert, mock_exists):
+    from app.tasks import images_to_pdf_task
+    import img2pdf
+    
+    mock_exists.return_value = True
+    mock_convert.return_value = b"%PDF-1.4 dummy"
+    mock_store.return_value = "http://download.url"
+    mock_s3_configured.return_value = True
+    
+    # We mock os.remove to avoid attempting to delete the mocked files
+    with patch("app.tasks.os.remove") as mock_remove:
+        result = images_to_pdf_task(["img1.png", "img2.jpg"], "original.png")
+        
+    assert result == {
+        "status": "success",
+        "download_url": "http://download.url"
+    }
+    
+    # Extract the actual list of paths passed to mock_convert
+    called_paths, kwargs = mock_convert.call_args
+    assert len(called_paths[0]) == 2
+    assert kwargs == {"rotation": img2pdf.Rotation.ifvalid}

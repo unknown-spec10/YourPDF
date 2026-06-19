@@ -468,7 +468,7 @@ def images_to_pdf_task(file_paths: list[str], original_filename: str = None):
             raise Exception("No valid image files exist to compile.")
             
         # Convert losslessly with img2pdf
-        pdf_bytes = img2pdf.convert(valid_paths)
+        pdf_bytes = img2pdf.convert(valid_paths, rotation=img2pdf.Rotation.ifvalid)
         with open(output_path, "wb") as f:
             f.write(pdf_bytes)
             

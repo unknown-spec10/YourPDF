@@ -479,3 +479,22 @@ def test_images_to_pdf_task_execution(mock_s3_configured, mock_store, mock_open,
     called_paths, kwargs = mock_convert.call_args
     assert len(called_paths[0]) == 2
     assert kwargs == {"rotation": img2pdf.Rotation.ifvalid}
+
+
+@patch("app.main.shutil.copyfileobj")
+@patch("app.main.open")
+@patch("app.main.convert_to_markdown_task.delay")
+def test_convert_to_markdown_success(mock_delay, mock_open, mock_copy, client):
+    """
+    Test that converting a file to Markdown successfully queues a conversion job.
+    """
+    class MockTask:
+        id = "mocked-markdown-123"
+    mock_delay.return_value = MockTask()
+
+    file = {"file": ("doc.docx", b"docx dummy content", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+    response = client.post("/api/convert-to-markdown", files=file)
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "mocked-markdown-123"
+    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], original_filename="doc.docx")
+

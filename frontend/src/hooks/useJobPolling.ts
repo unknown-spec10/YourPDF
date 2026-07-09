@@ -17,6 +17,7 @@ export interface JobStatusResponse {
     extracted_text?: string
     width?: number
     height?: number
+    markdown_content?: string
   }
 }
 

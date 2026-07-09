@@ -2210,3 +2210,71 @@ def merge_pptx_task(self, file_paths: list[str], original_filename: str = None):
                 os.remove(output_path)
             except Exception:
                 pass
+
+
+@celery.task(bind=True)
+def convert_to_markdown_task(self, file_path: str, original_filename: str = None):
+    """
+    Converts a file to Markdown using MarkItDown, uploads it, and cleans up.
+    """
+    logger.info(f"Starting convert to Markdown task for {file_path}")
+    self.update_state(state="PROGRESS", meta={"progress": 20, "message": "Initializing conversion..."})
+    
+    file_path = file_path.replace('\\', '/')
+    if not os.path.isabs(file_path):
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        backend_root = os.path.dirname(app_dir)
+        file_path = os.path.abspath(os.path.join(backend_root, file_path))
+        
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"converted_{uuid.uuid4()}.md"
+    output_path = os.path.join(output_dir, output_filename)
+    
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 50, "message": "Converting file to Markdown..."})
+        
+        from markitdown import MarkItDown
+        md = MarkItDown()
+        result = md.convert(file_path)
+        markdown_text = result.text_content
+        
+        # Save to markdown file
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(markdown_text)
+            
+        self.update_state(state="PROGRESS", meta={"progress": 85, "message": "Saving markdown file..."})
+        
+        original_name = None
+        if original_filename:
+            base, ext = os.path.splitext(original_filename)
+            original_name = f"{base}.md"
+            
+        download_url = store_processed_file(output_path, output_filename, original_name=original_name)
+        if not download_url:
+            raise Exception("Failed to store markdown file.")
+            
+        if not is_s3_configured():
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            backend_root = os.path.dirname(app_dir)
+            local_dest_path = os.path.abspath(os.path.join(backend_root, "static", "outputs", output_filename))
+            delete_local_file_task.apply_async((local_dest_path,), countdown=900)
+            
+        return {
+            "status": "success",
+            "download_url": download_url,
+            "markdown_content": markdown_text
+        }
+    except Exception as e:
+        logger.error(f"Markdown conversion failed: {e}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+

@@ -24,7 +24,8 @@ import {
   Crop,
   Maximize,
   RefreshCw,
-  Presentation
+  Presentation,
+  FileCode
 } from 'lucide-react'
 
 interface Tool {
@@ -225,6 +226,13 @@ export default function ToolsPage() {
       description: 'Combine multiple PowerPoint slide decks (.pptx) into a single presentation.',
       href: '/merge-pptx',
       icon: Layers,
+      type: 'server',
+    },
+    {
+      name: 'Convert to Markdown',
+      description: 'Convert PDF, Word, PowerPoint, Excel, HTML, and images to clean Markdown.',
+      href: '/markitdown',
+      icon: FileCode,
       type: 'server',
     },
   ]

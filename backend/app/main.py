@@ -32,7 +32,8 @@ from app.tasks import (
     docx_to_images_task,
     pptx_to_pdf_task,
     pptx_to_images_task,
-    merge_pptx_task
+    merge_pptx_task,
+    convert_to_markdown_task
 )
 from app.celery_app import celery
 
@@ -831,6 +832,45 @@ def merge_pptx(
         raise HTTPException(status_code=500, detail=f"Failed to save upload files: {str(e)}")
         
     task = merge_pptx_task.delay(saved_paths, original_filename=files[0].filename)
+    return {"job_id": task.id, "status": "queued"}
+
+
+@app.post("/api/convert-to-markdown", status_code=202)
+def convert_to_markdown(
+    file: UploadFile = File(...)
+):
+    # Validate file size
+    validate_file_size(file, 50)
+    
+    # Supported file extensions for markitdown
+    SUPPORTED_EXTENSIONS = [
+        ".pdf", ".docx", ".pptx", ".xlsx", ".xls", 
+        ".html", ".htm", ".txt", ".csv", ".json", ".xml",
+        ".jpg", ".jpeg", ".png", ".webp"
+    ]
+    ext = os.path.splitext(file.filename.lower())[1]
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported file type '{ext}'. Supported formats: PDF, Word, PowerPoint, Excel, HTML, Images, Text, CSV, JSON, XML"
+        )
+        
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_root = os.path.dirname(app_dir)
+    tmp_dir = os.path.join(backend_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    filename = f"upload_{uuid.uuid4()}{ext}"
+    host_file_path = os.path.join(tmp_dir, filename)
+    
+    try:
+        with open(host_file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
+        
+    relative_path = os.path.join("tmp", filename)
+    task = convert_to_markdown_task.delay(relative_path, original_filename=file.filename)
     return {"job_id": task.id, "status": "queued"}
 
 

@@ -1,10 +1,21 @@
 version: '3.8'
 
+# Shared Logging Configuration
+x-logging-options: &logging-options
+  awslogs-group: "yourpdf-production-logs"
+  awslogs-region: "${AWS_REGION:-ap-south-1}"
+  awslogs-create-group: "true"
+
 services:
   redis:
     image: redis:7-alpine
     container_name: yourpdf-prod-redis
     restart: always
+    logging:
+      driver: "awslogs"
+      options:
+        <<: *logging-options
+        awslogs-stream: "redis"
 
   backend:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-backend:latest
@@ -20,6 +31,11 @@ services:
     depends_on:
       - redis
     restart: always
+    logging:
+      driver: "awslogs"
+      options:
+        <<: *logging-options
+        awslogs-stream: "backend"
 
   celery_worker:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-backend:latest
@@ -35,11 +51,21 @@ services:
     depends_on:
       - redis
     restart: always
+    logging:
+      driver: "awslogs"
+      options:
+        <<: *logging-options
+        awslogs-stream: "celery-worker"
 
   frontend:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-frontend:latest
     container_name: yourpdf-prod-frontend
     restart: always
+    logging:
+      driver: "awslogs"
+      options:
+        <<: *logging-options
+        awslogs-stream: "frontend"
 
   nginx:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-nginx:latest
@@ -50,6 +76,11 @@ services:
       - frontend
       - backend
     restart: always
+    logging:
+      driver: "awslogs"
+      options:
+        <<: *logging-options
+        awslogs-stream: "nginx"
 
 volumes:
   tmp_data:

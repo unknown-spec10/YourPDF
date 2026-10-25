@@ -1,16 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, Type, Settings, Download, RefreshCw, AlertTriangle } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { useFileJob } from '@/hooks/useFileJob'
+import { submitJob, buildSingleFileFormData } from '@/lib/api'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+type WatermarkImageArgs = { file: File; text: string; color: string; opacity: number; position: WatermarkPosition }
+
+const watermarkImageSubmitter = ({ file, text, color, opacity, position }: WatermarkImageArgs) =>
+  submitJob('/api/image/watermark', buildSingleFileFormData(file, { text, color, opacity, position }))
 
 type WatermarkPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'tile'
 
@@ -21,54 +24,34 @@ export default function WatermarkImagePage() {
   const [opacity, setOpacity] = useState<number>(0.3)
   const [position, setPosition] = useState<WatermarkPosition>('center')
   
-  const [jobId, setJobId] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId, () => {})
-
-  useEffect(() => {
-    return () => setJobId(null)
-  }, [])
+  const {
+    isSubmitting,
+    isDone,
+    isError,
+    submitError,
+    submit,
+    reset,
+    downloadUrl,
+  } = useFileJob<WatermarkImageArgs>(watermarkImageSubmitter)
 
   const handleSubmit = async () => {
     if (!file || !text) return
-    setIsSubmitting(true)
-
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('text', text)
-    formData.append('color', color)
-    formData.append('opacity', String(opacity))
-    formData.append('position', position)
-
-    try {
-      const response = await axios.post(`${API_URL}/api/image/watermark`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err) {
-      console.error(err)
+    const ok = await submit({ file, text, color, opacity, position })
+    if (!ok) {
       alert('Failed to initialize image watermarking task. Please check server connection.')
-    } finally {
-      setIsSubmitting(false)
     }
   }
 
   const handleReset = () => {
     setFile(null)
-    setJobId(null)
+    reset()
     setText('Your Watermark')
     setColor('gray')
     setOpacity(0.3)
     setPosition('center')
   }
-
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
 
   const positionLabels: { value: WatermarkPosition; label: string }[] = [
     { value: 'top-left', label: 'Top Left' },
@@ -110,7 +93,7 @@ export default function WatermarkImagePage() {
       {/* Main Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -125,7 +108,7 @@ export default function WatermarkImagePage() {
             </motion.div>
           )}
 
-          {file && !jobId && (
+          {file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -241,25 +224,25 @@ export default function WatermarkImagePage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {(isSubmitting || isDone || isError) && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className="flex flex-col items-center py-6 text-center"
             >
-              {(isQueued || isProcessing) && (
+              {isSubmitting && (
                 <div className="w-full max-w-md">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Stamping watermark on image...'}
+                    progress={50}
+                    message="Stamping watermark on image..."
                   />
                 </div>
               )}
 
-              {isDone && jobStatus?.result && (
+              {isDone && downloadUrl && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
@@ -270,11 +253,7 @@ export default function WatermarkImagePage() {
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl ?? ''}
                       download
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
@@ -294,13 +273,13 @@ export default function WatermarkImagePage() {
 
               {isError && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Processing Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'An unexpected error occurred during processing.'}
+                      {submitError || 'An unexpected error occurred during processing.'}
                     </p>
                   </div>
                   <button

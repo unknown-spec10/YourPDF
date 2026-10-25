@@ -1,0 +1,789 @@
+"""Synchronous PDF processing functions (in-request, no queue).
+
+Each function takes an absolute (or backend-relative) input path, runs the
+same conversion logic the old queued tasks used to run, and returns
+``(output_bytes, download_filename)``. Callers stream the bytes straight
+back as a ``Response``. ``extract_text`` is the exception: with
+``export_txt=False`` it returns ``(text, None)`` and the router replies
+with JSON.
+"""
+
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import uuid
+import zipfile
+
+import img2pdf
+from pdf2docx import Converter
+from pdf2image import convert_from_path
+from pypdf import PdfReader, PdfWriter
+
+from app.tasks.common import (
+    SUBPROCESS_TIMEOUT,
+    SUBPROCESS_TIMEOUT_MESSAGE,
+    cleanup_paths,
+    ensure_tmp_dir,
+    read_bytes,
+    resolve_path,
+    resolve_paths,
+    write_bytes,
+    write_text,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _download_name(original_filename: str | None, fallback: str, build) -> str:
+    if original_filename:
+        base, ext = os.path.splitext(original_filename)
+        return build(base, ext)
+    return fallback
+
+
+def compress_pdf_task(file_path: str, quality: str, original_filename: str = None) -> tuple[bytes, str]:
+    """Run Ghostscript compression and return the compressed PDF bytes."""
+    logger.info(f"Starting compression task for {file_path} with quality {quality}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        logger.error(f"Input file not found: {file_path}")
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    quality_presets = {
+        "low": "/printer",
+        "medium": "/ebook",
+        "high": "/screen",
+    }
+    preset = quality_presets.get(quality.lower(), "/ebook")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"compressed_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(output_dir, output_filename)
+
+    gs_cmd = [
+        "gs",
+        "-sDEVICE=pdfwrite",
+        "-dCompatibilityLevel=1.4",
+        f"-dPDFSETTINGS={preset}",
+        "-dNOPAUSE",
+        "-dQUIET",
+        "-dBATCH",
+    ]
+
+    if quality.lower() == "medium":
+        gs_cmd.extend(
+            [
+                "-dDownsampleColorImages=true",
+                "-dColorImageDownsampleType=/Bicubic",
+                "-dColorImageResolution=150",
+                "-dDownsampleGrayImages=true",
+                "-dGrayImageDownsampleType=/Bicubic",
+                "-dGrayImageResolution=150",
+                "-dDownsampleMonoImages=true",
+                "-dMonoImageDownsampleType=/Bicubic",
+                "-dMonoImageResolution=150",
+                "-dColorImageFilter=/DCTEncode",
+                "-dGrayImageFilter=/DCTEncode",
+            ]
+        )
+    elif quality.lower() == "high":
+        gs_cmd.extend(
+            [
+                "-dDownsampleColorImages=true",
+                "-dColorImageDownsampleType=/Bicubic",
+                "-dColorImageResolution=60",
+                "-dDownsampleGrayImages=true",
+                "-dGrayImageDownsampleType=/Bicubic",
+                "-dGrayImageResolution=60",
+                "-dDownsampleMonoImages=true",
+                "-dMonoImageDownsampleType=/Bicubic",
+                "-dMonoImageResolution=100",
+                "-dColorImageFilter=/DCTEncode",
+                "-dGrayImageFilter=/DCTEncode",
+            ]
+        )
+
+    gs_cmd.extend([f"-sOutputFile={output_path}", file_path])
+
+    try:
+        logger.info(f"Running command: {' '.join(gs_cmd)}")
+        subprocess.run(gs_cmd, capture_output=True, text=True, check=True, timeout=SUBPROCESS_TIMEOUT)
+
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise Exception("Ghostscript executed but output file was not created or is empty.")
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_compressed{ext}"
+        )
+        logger.info("PDF compression completed successfully.")
+        return data, download_name
+
+    except subprocess.TimeoutExpired:
+        logger.error("Ghostscript timed out after %s seconds", SUBPROCESS_TIMEOUT)
+        raise Exception(SUBPROCESS_TIMEOUT_MESSAGE)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Ghostscript failed (exit code {e.returncode}): {e.stderr}")
+        raise Exception(f"Ghostscript compression failed: {e.stderr}")
+    except Exception as e:
+        logger.error(f"Task failed: {str(e)}")
+        raise e
+    finally:
+        for path in (file_path, output_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logger.info(f"Cleaned up local file: {path}")
+                except Exception as cleanup_err:
+                    logger.warning(f"Failed to remove {path}: {cleanup_err}")
+
+
+def merge_pdfs_task(file_paths: list[str], original_filename: str = None) -> tuple[bytes, str]:
+    """Combine PDFs in order and return the merged PDF bytes."""
+    logger.info(f"Starting PDF merge task for files: {file_paths}")
+
+    resolved_paths = resolve_paths(file_paths)
+
+    output_filename = f"merged_{uuid.uuid4()}.pdf"
+    tmp_dir = ensure_tmp_dir()
+    output_path = os.path.join(tmp_dir, output_filename)
+
+    merger = PdfWriter()
+    try:
+        for fp in resolved_paths:
+            if os.path.exists(fp):
+                merger.append(fp)
+            else:
+                logger.error(f"Merge file not found: {fp}")
+                raise FileNotFoundError(f"File to merge not found: {fp}")
+
+        with open(output_path, "wb") as f:
+            merger.write(f)
+        merger.close()
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_merged{ext}"
+        )
+        return data, download_name
+
+    except Exception as e:
+        logger.error(f"Merge task failed: {e}")
+        raise e
+    finally:
+        try:
+            merger.close()
+        except Exception:
+            pass
+        for fp in resolved_paths:
+            if fp and os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                except Exception as err:
+                    logger.warning(f"Failed to remove input PDF: {err}")
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+
+
+def split_pdf_task(file_path: str, mode: str, pages_spec: str, original_filename: str = None) -> tuple[bytes, str]:
+    """Split by custom range (PDF) or every page (ZIP) and return the bytes."""
+    logger.info(f"Starting split task. Mode: {mode}, Spec: {pages_spec}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File to split not found: {file_path}")
+
+    tmp_dir = ensure_tmp_dir()
+
+    output_filename = ""
+    output_path = ""
+
+    try:
+        reader = PdfReader(file_path)
+        total_pages = len(reader.pages)
+
+        if mode.lower() == "all" and total_pages > 1:
+            output_filename = f"split_{uuid.uuid4()}.zip"
+            output_path = os.path.join(tmp_dir, output_filename)
+
+            with zipfile.ZipFile(output_path, "w") as zipf:
+                for page_num in range(total_pages):
+                    writer = PdfWriter()
+                    writer.add_page(reader.pages[page_num])
+
+                    page_name = f"page_{page_num + 1}.pdf"
+                    page_temp_path = os.path.join(tmp_dir, page_name)
+
+                    with open(page_temp_path, "wb") as f:
+                        writer.write(f)
+
+                    zipf.write(page_temp_path, page_name)
+                    os.remove(page_temp_path)
+
+            download_name = _download_name(
+                original_filename, output_filename, lambda base, ext: f"{base}_split.zip"
+            )
+        else:
+            if mode.lower() == "all":
+                pages_to_extract = [0]
+            else:
+                pages_to_extract = []
+                for part in pages_spec.split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    if "-" in part:
+                        start_str, end_str = part.split("-")
+                        pages_to_extract.extend(range(int(start_str) - 1, int(end_str)))
+                    else:
+                        pages_to_extract.append(int(part) - 1)
+
+            writer = PdfWriter()
+            for page_num in pages_to_extract:
+                if 0 <= page_num < total_pages:
+                    writer.add_page(reader.pages[page_num])
+
+            output_filename = f"split_{uuid.uuid4()}.pdf"
+            output_path = os.path.join(tmp_dir, output_filename)
+            with open(output_path, "wb") as f:
+                writer.write(f)
+
+            download_name = _download_name(
+                original_filename, output_filename, lambda base, ext: f"{base}_split.pdf"
+            )
+
+        data = read_bytes(output_path)
+        return data, download_name
+
+    except Exception as e:
+        logger.error(f"Split task failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def pdf_to_images_task(file_path: str, img_format: str, dpi: int, original_filename: str = None) -> tuple[bytes, str]:
+    """Rasterize PDF pages; single page returns an image, otherwise a ZIP."""
+    logger.info(f"Starting PDF to Image task. Format: {img_format}, DPI: {dpi}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    tmp_dir = ensure_tmp_dir()
+
+    output_filename = ""
+    output_path = ""
+
+    try:
+        images = convert_from_path(file_path, dpi=dpi)
+
+        if len(images) == 1:
+            output_filename = f"image_{uuid.uuid4()}.{img_format.lower()}"
+            output_path = os.path.join(tmp_dir, output_filename)
+            images[0].save(output_path, format=img_format.upper())
+
+            download_name = _download_name(
+                original_filename,
+                output_filename,
+                lambda base, ext: f"{base}.{img_format.lower()}",
+            )
+        else:
+            output_filename = f"images_{uuid.uuid4()}.zip"
+            output_path = os.path.join(tmp_dir, output_filename)
+            with zipfile.ZipFile(output_path, "w") as zipf:
+                for idx, img in enumerate(images):
+                    img_name = f"page_{idx + 1}.{img_format.lower()}"
+                    temp_img_path = os.path.join(tmp_dir, img_name)
+
+                    img.save(temp_img_path, format=img_format.upper())
+                    zipf.write(temp_img_path, img_name)
+                    os.remove(temp_img_path)
+
+            download_name = _download_name(
+                original_filename, output_filename, lambda base, ext: f"{base}_images.zip"
+            )
+
+        data = read_bytes(output_path)
+        return data, download_name
+    except Exception as e:
+        logger.error(f"PDF to Image conversion failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def images_to_pdf_task(file_paths: list[str], original_filename: str = None) -> tuple[bytes, str]:
+    """Compile images into a single PDF and return the bytes."""
+    logger.info(f"Starting Images to PDF task for files: {file_paths}")
+
+    resolved_paths = resolve_paths(file_paths)
+
+    output_filename = f"compiled_{uuid.uuid4()}.pdf"
+    tmp_dir = ensure_tmp_dir()
+    output_path = os.path.join(tmp_dir, output_filename)
+
+    try:
+        valid_paths = [fp for fp in resolved_paths if os.path.exists(fp)]
+        if not valid_paths:
+            raise Exception("No valid image files exist to compile.")
+
+        pdf_bytes = img2pdf.convert(valid_paths, rotation=img2pdf.Rotation.ifvalid)
+        write_bytes(output_path, pdf_bytes)
+
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_compiled.pdf"
+        )
+        return pdf_bytes, download_name
+    except Exception as e:
+        logger.error(f"Images to PDF task failed: {e}")
+        raise e
+    finally:
+        for fp in resolved_paths:
+            if fp and os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+
+
+def extract_text_task(
+    file_path: str, export_txt: bool, original_filename: str = None
+) -> tuple[bytes | str, str | None]:
+    """Extract text; export_txt=True returns (txt bytes, name), else (text, None)."""
+    logger.info(f"Starting text extraction task. export_txt: {export_txt}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    output_filename = ""
+    output_path = ""
+
+    try:
+        reader = PdfReader(file_path)
+        extracted_content = ""
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text()
+            if text:
+                extracted_content += f"--- Page {i + 1} ---\n{text}\n\n"
+
+        if not extracted_content:
+            extracted_content = "No text could be extracted from this document."
+
+        if export_txt:
+            output_filename = f"extracted_{uuid.uuid4()}.txt"
+            tmp_dir = ensure_tmp_dir()
+            output_path = os.path.join(tmp_dir, output_filename)
+
+            write_text(output_path, extracted_content)
+
+            download_name = _download_name(
+                original_filename, output_filename, lambda base, ext: f"{base}_extracted.txt"
+            )
+            return extracted_content.encode("utf-8"), download_name
+        else:
+            return extracted_content, None
+    except Exception as e:
+        logger.error(f"Text extraction failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def pdf_to_docx_task(file_path: str, original_filename: str = None) -> tuple[bytes, str]:
+    """Convert a PDF to DOCX and return the bytes."""
+    logger.info(f"Starting PDF to DOCX task for {file_path}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"converted_{uuid.uuid4()}.docx"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        cv = Converter(file_path)
+        cv.convert(output_path, start=0, end=None)
+        cv.close()
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}.docx"
+        )
+        return data, download_name
+    except Exception as e:
+        logger.error(f"PDF to DOCX conversion failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def docx_to_pdf_task(file_path: str, original_filename: str = None) -> tuple[bytes, str]:
+    """Convert a DOCX to PDF via LibreOffice (or Word on Windows) and return bytes."""
+    logger.info(f"Starting DOCX to PDF task for {file_path}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"converted_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        soffice_cmd = None
+        if sys.platform == "win32":
+            paths = [
+                r"C:\Program Files\LibreOffice\program\soffice.exe",
+                r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+            ]
+            for p in paths:
+                if os.path.exists(p):
+                    soffice_cmd = p
+                    break
+
+        if not soffice_cmd:
+            for cmd in ["soffice", "libreoffice"]:
+                if shutil.which(cmd):
+                    soffice_cmd = cmd
+                    break
+
+        converted = False
+        if soffice_cmd:
+            cmd = [soffice_cmd, "--headless", "--convert-to", "pdf", "--outdir", output_dir, file_path]
+            logger.info(f"Running LibreOffice conversion: {' '.join(cmd)}")
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=SUBPROCESS_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                logger.error("LibreOffice conversion timed out after %s seconds", SUBPROCESS_TIMEOUT)
+                raise Exception(SUBPROCESS_TIMEOUT_MESSAGE)
+
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            generated_pdf = os.path.join(output_dir, f"{base_name}.pdf")
+            if os.path.exists(generated_pdf):
+                if generated_pdf != output_path:
+                    shutil.move(generated_pdf, output_path)
+                converted = True
+
+        if not converted and sys.platform == "win32":
+            try:
+                import win32com.client
+
+                logger.info("Attempting MS Word COM fallback on Windows")
+                word = win32com.client.Dispatch("Word.Application")
+                word.Visible = False
+                doc = word.Documents.Open(os.path.abspath(file_path))
+                doc.SaveAs(os.path.abspath(output_path), FileFormat=17)
+                doc.Close()
+                word.Quit()
+                converted = True
+            except Exception as com_err:
+                logger.error(f"MS Word COM fallback failed: {com_err}")
+
+        if not converted:
+            raise Exception("Could not convert DOCX to PDF. Neither LibreOffice headless nor MS Word is available.")
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}.pdf"
+        )
+        return data, download_name
+    except Exception as e:
+        logger.error(f"DOCX to PDF conversion failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def create_watermark_pdf(output_path, text, color="gray", opacity=0.3, rotation=45):
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.pagesizes import letter
+
+    c = canvas.Canvas(output_path, pagesize=letter)
+    width, height = letter
+    c.translate(width / 2.0, height / 2.0)
+    c.rotate(rotation)
+    c.setFillAlpha(opacity)
+
+    colors_map = {
+        "red": "#FF0000",
+        "green": "#00FF00",
+        "blue": "#0000FF",
+        "gray": "#808080",
+        "black": "#000000",
+    }
+    hex_color = colors_map.get(color.lower(), "#808080")
+    c.setFillColor(HexColor(hex_color))
+    c.setFont("Helvetica", 48)
+    c.drawCentredString(0, 0, text)
+    c.save()
+
+
+def create_page_number_pdf(output_path, width, height, current_page, total_pages, position):
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(output_path, pagesize=(width, height))
+    c.setFont("Helvetica", 10)
+    c.setFillColorRGB(0.5, 0.5, 0.5)
+
+    text = f"Page {current_page} of {total_pages}"
+    margin = 36
+    x = width / 2.0
+    y = margin
+
+    if "top" in position:
+        y = height - margin
+
+    if "left" in position:
+        x = margin
+        align = "left"
+    elif "right" in position:
+        x = width - margin
+        align = "right"
+    else:
+        x = width / 2.0
+        align = "center"
+
+    if align == "left":
+        c.drawString(x, y, text)
+    elif align == "right":
+        c.drawRightString(x, y, text)
+    else:
+        c.drawCentredString(x, y, text)
+
+    c.save()
+
+
+def rotate_pdf_task(file_path: str, rotation: int, original_filename: str = None) -> tuple[bytes, str]:
+    """Rotate all PDF pages and return the bytes."""
+    logger.info(f"Starting PDF rotation task for {file_path}. Rotation angle: {rotation}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"rotated_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        reader = PdfReader(file_path)
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            page.rotate(rotation)
+            writer.add_page(page)
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_rotated{ext}"
+        )
+        return data, download_name
+    except Exception as e:
+        logger.error(f"Rotation task failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def organize_pdf_task(file_path: str, page_order: str, original_filename: str = None) -> tuple[bytes, str]:
+    """Reorder/delete PDF pages and return the bytes."""
+    logger.info(f"Starting PDF organization task for {file_path}. Order: {page_order}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"organized_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        reader = PdfReader(file_path)
+        writer = PdfWriter()
+
+        indices = [int(p.strip()) - 1 for p in page_order.split(",") if p.strip()]
+        total_pages = len(reader.pages)
+
+        for idx in indices:
+            if 0 <= idx < total_pages:
+                writer.add_page(reader.pages[idx])
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_organized{ext}"
+        )
+        return data, download_name
+    except Exception as e:
+        logger.error(f"Organization task failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def watermark_pdf_task(
+    file_path: str,
+    text: str,
+    color: str = "gray",
+    opacity: float = 0.3,
+    rotation: int = 45,
+    original_filename: str = None,
+) -> tuple[bytes, str]:
+    """Apply a text watermark to all PDF pages and return the bytes."""
+    logger.info(f"Starting PDF watermarking task for {file_path}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"watermarked_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        temp_watermark_pdf = os.path.join(output_dir, f"temp_wm_{uuid.uuid4()}.pdf")
+        create_watermark_pdf(temp_watermark_pdf, text, color, opacity, rotation)
+
+        reader = PdfReader(file_path)
+        wm_reader = PdfReader(temp_watermark_pdf)
+        wm_page = wm_reader.pages[0]
+
+        writer = PdfWriter()
+        for page in reader.pages:
+            page.merge_page(wm_page)
+            writer.add_page(page)
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        if os.path.exists(temp_watermark_pdf):
+            os.remove(temp_watermark_pdf)
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_watermarked{ext}"
+        )
+        return data, download_name
+    except Exception as e:
+        logger.error(f"Watermark task failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def add_page_numbers_task(
+    file_path: str, position: str = "bottom-center", original_filename: str = None
+) -> tuple[bytes, str]:
+    """Stamp page numbers onto all PDF pages and return the bytes."""
+    logger.info(f"Starting page numbering task for {file_path}. Position: {position}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"numbered_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        reader = PdfReader(file_path)
+        writer = PdfWriter()
+        total_pages = len(reader.pages)
+
+        for idx, page in enumerate(reader.pages):
+            box = page.mediabox
+            width = float(box.width)
+            height = float(box.height)
+
+            temp_pagenum_pdf = os.path.join(output_dir, f"temp_num_{uuid.uuid4()}.pdf")
+            create_page_number_pdf(temp_pagenum_pdf, width, height, idx + 1, total_pages, position)
+
+            num_reader = PdfReader(temp_pagenum_pdf)
+            page.merge_page(num_reader.pages[0])
+            writer.add_page(page)
+
+            if os.path.exists(temp_pagenum_pdf):
+                os.remove(temp_pagenum_pdf)
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_numbered{ext}"
+        )
+        return data, download_name
+    except Exception as e:
+        logger.error(f"Page numbering task failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)
+
+
+def ocr_pdf_task(file_path: str, language: str = "eng", original_filename: str = None) -> tuple[bytes, str]:
+    """Run OCR via ocrmypdf and return the processed PDF bytes."""
+    logger.info(f"Starting OCR task for {file_path}. Language: {language}")
+
+    file_path = resolve_path(file_path)
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+
+    output_dir = os.path.dirname(file_path)
+    output_filename = f"ocr_{uuid.uuid4()}.pdf"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        cmd = ["ocrmypdf", "--skip-text", "-l", language, file_path, output_path]
+        logger.info(f"Running OCR command: {' '.join(cmd)}")
+        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=SUBPROCESS_TIMEOUT)
+
+        data = read_bytes(output_path)
+        download_name = _download_name(
+            original_filename, output_filename, lambda base, ext: f"{base}_ocr{ext}"
+        )
+        return data, download_name
+    except FileNotFoundError:
+        logger.error("ocrmypdf command not found in PATH.")
+        raise Exception("OCR tool is not installed or configured on the server. Requires ocrmypdf and Tesseract OCR.")
+    except subprocess.TimeoutExpired:
+        logger.error("OCR timed out after %s seconds", SUBPROCESS_TIMEOUT)
+        raise Exception(SUBPROCESS_TIMEOUT_MESSAGE)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"OCR command failed (code {e.returncode}): {e.stderr}")
+        raise Exception(f"OCR processing failed: {e.stderr or e.stdout}")
+    except Exception as e:
+        logger.error(f"OCR task failed: {e}")
+        raise e
+    finally:
+        cleanup_paths(file_path, output_path)

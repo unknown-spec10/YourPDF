@@ -1,16 +1,27 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, Maximize, Settings, Download, RefreshCw, AlertTriangle } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { useFileJob } from '@/hooks/useFileJob'
+import { submitJob, buildSingleFileFormData } from '@/lib/api'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+type ResizeImageArgs = { file: File; mode: 'pixels' | 'percentage'; width: string; height: string; maintain_aspect: boolean; percentage: number }
+
+const resizeImageSubmitter = ({ file, mode, width, height, maintain_aspect, percentage }: ResizeImageArgs) => {
+  const params: Record<string, string | number | boolean> = { maintain_aspect }
+  if (mode === 'percentage') {
+    params.percentage = percentage
+  } else {
+    if (width) params.width = width
+    if (height) params.height = height
+  }
+  return submitJob('/api/image/resize', buildSingleFileFormData(file, params))
+}
 
 export default function ResizeImagePage() {
   const [file, setFile] = useState<File | null>(null)
@@ -24,56 +35,32 @@ export default function ResizeImagePage() {
   // Percentage parameters
   const [percentage, setPercentage] = useState<number>(50)
   
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId, () => {})
-
-  useEffect(() => {
-    return () => setJobId(null)
-  }, [])
+  const {
+    isSubmitting,
+    isDone,
+    isError,
+    submitError,
+    submit,
+    reset,
+    downloadUrl,
+  } = useFileJob<ResizeImageArgs>(resizeImageSubmitter)
 
   const handleSubmit = async () => {
     if (!file) return
-    setIsSubmitting(true)
-
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('maintain_aspect', String(maintainAspect))
-
-    if (mode === 'percentage') {
-      formData.append('percentage', String(percentage))
-    } else {
-      if (width) formData.append('width', width)
-      if (height) formData.append('height', height)
-    }
-
-    try {
-      const response = await axios.post(`${API_URL}/api/image/resize`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err) {
-      console.error(err)
+    const ok = await submit({ file, mode, width, height, maintain_aspect: maintainAspect, percentage })
+    if (!ok) {
       alert('Failed to initialize image resizing task. Please check server connection.')
-    } finally {
-      setIsSubmitting(false)
     }
   }
 
   const handleReset = () => {
     setFile(null)
-    setJobId(null)
+    reset()
     setWidth('')
     setHeight('')
     setPercentage(50)
   }
-
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-12 flex-1 flex flex-col justify-center">
@@ -97,7 +84,7 @@ export default function ResizeImagePage() {
       {/* Main Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -112,7 +99,7 @@ export default function ResizeImagePage() {
             </motion.div>
           )}
 
-          {file && !jobId && (
+          {file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -228,42 +215,36 @@ export default function ResizeImagePage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {(isSubmitting || isDone || isError) && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className="flex flex-col items-center py-6 text-center"
             >
-              {(isQueued || isProcessing) && (
+              {isSubmitting && (
                 <div className="w-full max-w-md">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Processing image...'}
+                    progress={50}
+                    message="Processing image..."
                   />
                 </div>
               )}
 
-              {isDone && jobStatus?.result && (
+              {isDone && downloadUrl && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Resizing Complete!</h3>
-                    {jobStatus.result.width && jobStatus.result.height && (
-                      <p className="text-sm text-accent font-semibold mt-1">
-                        New dimensions: {jobStatus.result.width} × {jobStatus.result.height} px
-                      </p>
-                    )}
+                    <p className="text-sm text-muted mt-1">
+                      Your resized image is ready. Click below to download.
+                    </p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl ?? ''}
                       download
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
@@ -283,13 +264,13 @@ export default function ResizeImagePage() {
 
               {isError && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Processing Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'An unexpected error occurred during processing.'}
+                      {submitError || 'An unexpected error occurred during processing.'}
                     </p>
                   </div>
                   <button

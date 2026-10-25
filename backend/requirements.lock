@@ -1,0 +1,50 @@
+# requirements.lock - fully pinned working set (every line == pinned).
+# Human-edited floor file: requirements.txt. Do not edit this lock by hand.
+# Generated from myenv on 2026-10-25 via:
+#   D:/Projects/pdf-toolkit/myenv/Scripts/python.exe -m pip freeze
+# filtered to packages reachable from requirements.txt plus pinned transitive deps.
+# Regenerate: re-run the pip freeze command above from backend/ with myenv active,
+# then keep only lines reachable from requirements.txt (direct + transitive closure).
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.13.0
+certifi==2026.5.20
+charset-normalizer==3.4.7
+click==8.5.0
+colorama==0.4.6
+fastapi==0.136.3
+fire==0.7.1
+fonttools==4.63.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.18
+img2pdf==0.6.3
+iniconfig==2.3.0
+lxml==6.1.1
+numpy==2.4.6
+opencv-python-headless==4.13.0.92
+packaging==26.2
+pdf2docx==0.5.13
+pdf2image==1.17.0
+pikepdf==10.7.3
+pillow==12.2.0
+pluggy==1.6.0
+pydantic==2.13.4
+pydantic-settings==2.14.1
+pydantic_core==2.46.4
+Pygments==2.20.0
+PyMuPDF==1.27.2.3
+pypdf==6.13.0
+pytest==9.0.3
+python-docx==1.2.0
+python-dotenv==1.2.2
+python-multipart==0.0.32
+python-pptx==1.0.2
+reportlab==4.5.1
+starlette==1.2.1
+termcolor==3.3.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+uvicorn==0.49.0
+xlsxwriter==3.2.9

@@ -59,36 +59,37 @@ export default function Navbar() {
   ]
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-surface/50 backdrop-blur-lg shadow-lg shadow-black/5 transition-colors duration-200">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+    <header className="sticky top-0 z-50 w-full border-b border-border/70 bg-background/80 backdrop-blur-xl">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-6">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2.5 group">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-md shadow-accent/10 transition-all duration-300 group-hover:scale-105 group-hover:shadow-accent/20">
-            <FileSpreadsheet className="h-5 w-5" />
+        <Link href="/" className="group flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background shadow-sm transition-transform duration-200 group-hover:scale-105">
+            <FileSpreadsheet className="h-4.5 w-4.5" strokeWidth={2.2} />
           </div>
-          <span className="text-xl font-bold tracking-tight text-foreground transition-colors group-hover:text-accent">
+          <span className="text-[17px] font-semibold tracking-tight text-foreground">
             YourPDF
           </span>
         </Link>
 
         {/* Navigation (Desktop) */}
-        <nav className="hidden md:flex items-center gap-8 text-sm font-medium">
+        <nav className="hidden items-center gap-1 text-sm font-medium md:flex" aria-label="Primary">
           {navLinks.map((link) => {
             const isActive = pathname === link.href
             return (
               <Link
                 key={link.href}
                 href={link.href}
-                className={`relative py-1.5 transition-all duration-200 hover:text-accent ${
-                  isActive ? 'text-accent' : 'text-muted'
+                aria-current={isActive ? 'page' : undefined}
+                className={`relative rounded-md px-3 py-2 transition-colors duration-150 ${
+                  isActive ? 'text-foreground' : 'text-muted hover:text-foreground'
                 }`}
               >
                 <span>{link.name}</span>
                 {isActive && (
                   <motion.div
                     layoutId="navbarActiveIndicator"
-                    className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent rounded-full"
-                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                    className="absolute inset-x-3 -bottom-[13px] h-[2px] rounded-full bg-accent"
+                    transition={{ type: 'spring', stiffness: 380, damping: 32 }}
                   />
                 )}
               </Link>
@@ -97,35 +98,37 @@ export default function Navbar() {
         </nav>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
           <a
             href="https://github.com"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:bg-surface hover:text-foreground transition-all duration-200"
+            className="hidden h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground sm:flex"
             title="View source on GitHub"
+            aria-label="View source on GitHub"
           >
-            <GithubIcon className="h-5 w-5" />
+            <GithubIcon className="h-[18px] w-[18px]" />
           </a>
 
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:bg-surface hover:text-foreground transition-all duration-200 cursor-pointer"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground cursor-pointer"
             aria-label="Toggle theme"
           >
             {mounted && theme === 'dark' ? (
-              <Sun className="h-5 w-5 text-amber-500 animate-pulse-subtle" />
+              <Sun className="h-[18px] w-[18px]" />
             ) : (
-              <Moon className="h-5 w-5" />
+              <Moon className="h-[18px] w-[18px]" />
             )}
           </button>
 
           {/* Mobile Menu Toggle */}
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/40 text-muted hover:bg-surface hover:text-foreground transition-all duration-200 cursor-pointer md:hidden"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground cursor-pointer md:hidden"
             aria-label="Toggle mobile menu"
+            aria-expanded={isMobileMenuOpen}
           >
             {isMobileMenuOpen ? (
               <X className="h-5 w-5" />
@@ -143,24 +146,35 @@ export default function Navbar() {
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.2, ease: 'easeInOut' }}
-            className="border-t border-border/40 bg-surface/90 backdrop-blur-xl md:hidden overflow-hidden"
+            transition={{ duration: 0.18, ease: 'easeInOut' }}
+            className="overflow-hidden border-t border-border/70 bg-background/95 backdrop-blur-xl md:hidden"
           >
-            <nav className="flex flex-col px-6 py-4 gap-4 text-base font-semibold">
+            <nav className="flex flex-col gap-1 px-5 py-4 text-[15px] font-medium" aria-label="Mobile">
               {navLinks.map((link) => {
                 const isActive = pathname === link.href
                 return (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className={`py-2 transition-colors duration-200 hover:text-accent ${
-                      isActive ? 'text-accent' : 'text-muted'
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`rounded-lg px-3 py-2.5 transition-colors duration-150 ${
+                      isActive
+                        ? 'bg-surface-2 text-foreground'
+                        : 'text-muted hover:bg-surface-2 hover:text-foreground'
                     }`}
                   >
                     {link.name}
                   </Link>
                 )
               })}
+              <a
+                href="https://github.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg px-3 py-2.5 text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground sm:hidden"
+              >
+                GitHub
+              </a>
             </nav>
           </motion.div>
         )}

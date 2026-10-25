@@ -1,500 +1,428 @@
-import os
-from unittest.mock import patch
+"""Synchronous endpoint tests: status codes, content types, roundtrips."""
+import io
+import zipfile
+
+from pypdf import PdfReader, PdfWriter
+from PIL import Image
+
+
+def _make_pdf_bytes(pages: int = 1) -> bytes:
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=200, height=200)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def _make_text_pdf_bytes(text: str = "hello world") -> bytes:
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(200, 200))
+    c.drawString(50, 100, text)
+    c.save()
+    return buf.getvalue()
+
+
+def _make_image_bytes(fmt: str = "JPEG", size=(100, 80)) -> bytes:
+    img = Image.new("RGB", size, color=(200, 30, 30))
+    buf = io.BytesIO()
+    img.save(buf, fmt)
+    return buf.getvalue()
+
+
+def _make_docx_bytes(text: str = "hello") -> bytes:
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph(text)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _make_pptx_bytes(text: str = "hello") -> bytes:
+    from pptx import Presentation
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    tx_box = slide.shapes.add_textbox(left=0, top=0, width=1000000, height=500000)
+    tx_box.text_frame.text = text
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def _pdf_file(name: str = "doc.pdf", pages: int = 1):
+    return {"file": (name, _make_pdf_bytes(pages), "application/pdf")}
+
 
 def test_health_check(client):
-    """
-    Test that the health endpoint returns service status details.
-    """
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "yourpdf-backend"}
 
+
 def test_file_size_exceeded(client):
-    """
-    Test that uploading a file larger than 50MB results in a 400 bad request error.
-    """
-    large_data = b"0" * (51 * 1024 * 1024)
+    large_data = b"0" * (31 * 1024 * 1024)
     files = {"file": ("large.pdf", large_data, "application/pdf")}
     response = client.post("/api/compress", files=files, data={"quality": "low"})
     assert response.status_code == 400
     assert "exceeds the maximum limit" in response.json()["detail"]
+    assert "30MB" in response.json()["detail"]
+
 
 def test_compress_invalid_extension(client):
-    """
-    Test that uploading a non-PDF file results in a 400 bad request error.
-    """
     files = {"file": ("test.txt", b"plain text data", "text/plain")}
     response = client.post("/api/compress", files=files, data={"quality": "low"})
     assert response.status_code == 400
     assert response.json()["detail"] == "Only PDF files are supported."
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.compress_pdf_task.delay")
-def test_compress_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that uploading a PDF successfully queues a Celery job and writes file to workspace tmp directory.
-    """
-    # Mock the Celery Task object returned by delay()
-    class MockTask:
-        id = "mocked-job-1234"
-    mock_delay.return_value = MockTask()
 
-    files = {"file": ("document.pdf", b"%PDF-1.4 mock content", "application/pdf")}
-    response = client.post("/api/compress", files=files, data={"quality": "medium"})
-    
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-job-1234"
-    assert response.json()["status"] == "queued"
-    
-    # Assert delay was triggered with the correct relative path structure
-    mock_delay.assert_called_once()
-    args, _ = mock_delay.call_args
-    task_file_path = args[0]
-    assert task_file_path.startswith(os.path.join("tmp", "upload_"))
-    assert task_file_path.endswith(".pdf")
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.merge_pdfs_task.delay")
-def test_merge_pdfs_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that merging multiple PDFs successfully queues a merge job.
-    """
-    class MockTask:
-        id = "mocked-merge-123"
-    mock_delay.return_value = MockTask()
-
+def test_merge_pdfs_roundtrip(client):
     files = [
-        ("files", ("doc1.pdf", b"%PDF-1.4 dummy1", "application/pdf")),
-        ("files", ("doc2.pdf", b"%PDF-1.4 dummy2", "application/pdf")),
+        ("files", ("doc1.pdf", _make_pdf_bytes(1), "application/pdf")),
+        ("files", ("doc2.pdf", _make_pdf_bytes(2), "application/pdf")),
     ]
     response = client.post("/api/merge", files=files)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-merge-123"
-    mock_delay.assert_called_once()
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "doc1_merged" in response.headers.get("content-disposition", "")
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 3
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.split_pdf_task.delay")
-def test_split_pdf_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that splitting a PDF successfully queues a split job.
-    """
-    class MockTask:
-        id = "mocked-split-123"
-    mock_delay.return_value = MockTask()
 
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/split", files=file, data={"mode": "custom", "pages_spec": "1-2"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-split-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "custom", "1-2", original_filename="doc.pdf")
+def test_merge_pdfs_single_file_rejected(client):
+    files = [("files", ("doc1.pdf", _make_pdf_bytes(1), "application/pdf"))]
+    response = client.post("/api/merge", files=files)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "At least 2 PDF files are required to merge."
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.pdf_to_images_task.delay")
-def test_pdf_to_images_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that converting a PDF to images successfully queues a conversion job.
-    """
-    class MockTask:
-        id = "mocked-pdf2img-123"
-    mock_delay.return_value = MockTask()
 
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/pdf-to-images", files=file, data={"format": "png", "dpi": "150"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-pdf2img-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "png", 150, original_filename="doc.pdf")
+def test_split_custom_roundtrip(client):
+    response = client.post(
+        "/api/split", files=_pdf_file(pages=3), data={"mode": "custom", "pages_spec": "1-2"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "doc_split" in response.headers.get("content-disposition", "")
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 2
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.images_to_pdf_task.delay")
-def test_images_to_pdf_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that converting images to a PDF successfully queues a compilation job.
-    """
-    class MockTask:
-        id = "mocked-img2pdf-123"
-    mock_delay.return_value = MockTask()
 
+def test_split_missing_spec_rejected(client):
+    response = client.post(
+        "/api/split", files=_pdf_file(), data={"mode": "custom", "pages_spec": ""}
+    )
+    assert response.status_code == 400
+
+
+def test_split_all_multi_page_returns_zip(client):
+    response = client.post(
+        "/api/split", files=_pdf_file(pages=2), data={"mode": "all", "pages_spec": ""}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert response.headers.get("content-disposition", "").endswith('.zip"')
+    names = zipfile.ZipFile(io.BytesIO(response.content)).namelist()
+    assert names == ["page_1.pdf", "page_2.pdf"]
+
+
+def test_images_to_pdf_roundtrip(client):
     files = [
-        ("files", ("img1.png", b"pngdata", "image/png")),
-        ("files", ("img2.jpg", b"jpgdata", "image/jpeg")),
+        ("files", ("img1.png", _make_image_bytes("PNG"), "image/png")),
+        ("files", ("img2.jpg", _make_image_bytes("JPEG"), "image/jpeg")),
     ]
     response = client.post("/api/images-to-pdf", files=files)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-img2pdf-123"
-    mock_delay.assert_called_once()
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "compiled" in response.headers.get("content-disposition", "")
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 2
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.extract_text_task.delay")
-def test_extract_text_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that extracting text from a PDF successfully queues an extraction job.
-    """
-    class MockTask:
-        id = "mocked-extract-123"
-    mock_delay.return_value = MockTask()
 
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/extract-text", files=file, data={"export_txt": "true"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-extract-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], True, original_filename="doc.pdf")
+def test_images_to_pdf_rejects_non_image(client):
+    files = [("files", ("doc.pdf", _make_pdf_bytes(), "application/pdf"))]
+    response = client.post("/api/images-to-pdf", files=files)
+    assert response.status_code == 400
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.pdf_to_docx_task.delay")
-def test_pdf_to_docx_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that converting a PDF to DOCX successfully queues a conversion job.
-    """
-    class MockTask:
-        id = "mocked-pdf2docx-123"
-    mock_delay.return_value = MockTask()
 
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/pdf-to-docx", files=file)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-pdf2docx-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], original_filename="doc.pdf")
+def test_extract_text_inline_json(client):
+    response = client.post(
+        "/api/extract-text",
+        files={"file": ("doc.pdf", _make_text_pdf_bytes("hello world"), "application/pdf")},
+        data={"export_txt": "false"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert "hello world" in response.json()["text"]
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.docx_to_pdf_task.delay")
-def test_docx_to_pdf_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that converting a DOCX to PDF successfully queues a conversion job.
-    """
-    class MockTask:
-        id = "mocked-docx2pdf-123"
-    mock_delay.return_value = MockTask()
 
-    file = {"file": ("doc.docx", b"docx dummy content", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
-    response = client.post("/api/docx-to-pdf", files=file)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-docx2pdf-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], original_filename="doc.docx")
+def test_extract_text_export_txt(client):
+    response = client.post(
+        "/api/extract-text",
+        files={"file": ("doc.pdf", _make_text_pdf_bytes("hello world"), "application/pdf")},
+        data={"export_txt": "true"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "doc_extracted" in response.headers.get("content-disposition", "")
+    assert b"hello world" in response.content
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.protect_pdf_task.delay")
-def test_protect_pdf_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-protect-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/protect", files=file, data={"password": "secure"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-protect-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "secure", original_filename="doc.pdf")
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.unlock_pdf_task.delay")
-def test_unlock_pdf_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-unlock-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/unlock", files=file, data={"password": "secure"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-unlock-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "secure", original_filename="doc.pdf")
+def test_protect_pdf_success(client):
+    pdf_bytes = _make_pdf_bytes()
+    files = {"file": ("doc.pdf", pdf_bytes, "application/pdf")}
+    response = client.post("/api/protect", files=files, data={"password": "secret"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "doc_protected" in response.headers.get("content-disposition", "")
+    reader = PdfReader(io.BytesIO(response.content))
+    assert reader.is_encrypted
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.rotate_pdf_task.delay")
-def test_rotate_pdf_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-rotate-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/rotate", files=file, data={"rotation": "90"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-rotate-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 90, original_filename="doc.pdf")
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.organize_pdf_task.delay")
-def test_organize_pdf_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-organize-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/organize", files=file, data={"page_order": "1,3,2"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-organize-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "1,3,2", original_filename="doc.pdf")
+def test_unlock_pdf_success(client):
+    from app.pdf_security import protect_pdf_bytes
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.watermark_pdf_task.delay")
-def test_watermark_pdf_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-watermark-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/watermark", files=file, data={
-        "text": "COPY",
-        "color": "red",
-        "opacity": "0.5",
-        "rotation": "45"
-    })
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-watermark-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "COPY", "red", 0.5, 45, original_filename="doc.pdf")
+    protected = protect_pdf_bytes(_make_pdf_bytes(), "secret")
+    files = {"file": ("doc_protected.pdf", protected, "application/pdf")}
+    response = client.post("/api/unlock", files=files, data={"password": "secret"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    reader = PdfReader(io.BytesIO(response.content))
+    assert len(reader.pages) == 1
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.add_page_numbers_task.delay")
-def test_add_page_numbers_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-pagenum-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/add-page-numbers", files=file, data={"position": "bottom-right"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-pagenum-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "bottom-right", original_filename="doc.pdf")
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.ocr_pdf_task.delay")
-def test_ocr_pdf_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-ocr-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("doc.pdf", b"%PDF-1.4 dummy", "application/pdf")}
-    response = client.post("/api/ocr", files=file, data={"language": "eng"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-ocr-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "eng", original_filename="doc.pdf")
+def test_unlock_pdf_wrong_password(client):
+    from app.pdf_security import protect_pdf_bytes
+
+    protected = protect_pdf_bytes(_make_pdf_bytes(), "secret")
+    files = {"file": ("doc_protected.pdf", protected, "application/pdf")}
+    response = client.post("/api/unlock", files=files, data={"password": "wrong"})
+    assert response.status_code == 400
+
+
+def test_rotate_pdf_roundtrip(client):
+    response = client.post("/api/rotate", files=_pdf_file(), data={"rotation": "90"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "doc_rotated" in response.headers.get("content-disposition", "")
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 1
+
+
+def test_rotate_pdf_invalid_angle(client):
+    response = client.post("/api/rotate", files=_pdf_file(), data={"rotation": "45"})
+    assert response.status_code == 400
+
+
+def test_organize_pdf_roundtrip(client):
+    response = client.post("/api/organize", files=_pdf_file(pages=2), data={"page_order": "2,1"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "doc_organized" in response.headers.get("content-disposition", "")
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 2
+
+
+def test_organize_pdf_missing_order(client):
+    # Empty required Form fields are rejected by the framework with 422
+    # (unchanged pre-existing behavior).
+    response = client.post("/api/organize", files=_pdf_file(), data={"page_order": ""})
+    assert response.status_code == 422
+
+
+def test_watermark_pdf_roundtrip(client):
+    response = client.post(
+        "/api/watermark",
+        files=_pdf_file(),
+        data={"text": "COPY", "color": "red", "opacity": "0.5", "rotation": "45"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "doc_watermarked" in response.headers.get("content-disposition", "")
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 1
+
+
+def test_add_page_numbers_roundtrip(client):
+    response = client.post(
+        "/api/add-page-numbers", files=_pdf_file(), data={"position": "bottom-right"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "doc_numbered" in response.headers.get("content-disposition", "")
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 1
 
 
 def test_image_invalid_extension(client):
-    """
-    Test that uploading a non-image file to image endpoints results in a 400 bad request error.
-    """
     files = {"file": ("test.pdf", b"%PDF-1.4 dummy", "application/pdf")}
     response = client.post("/api/image/compress", files=files, data={"quality": "75"})
     assert response.status_code == 400
     assert response.json()["detail"] == "Only JPG, JPEG, PNG, and WEBP image files are supported."
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.compress_image_task.delay")
-def test_compress_image_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-img-compress-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
-    response = client.post("/api/image/compress", files=file, data={"quality": "80"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-img-compress-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 80, original_filename="photo.jpg")
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.resize_image_task.delay")
-def test_resize_image_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-img-resize-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
-    response = client.post("/api/image/resize", files=file, data={"width": "800", "height": "600", "maintain_aspect": "true"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-img-resize-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 800, 600, None, True, original_filename="photo.jpg")
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.crop_image_task.delay")
-def test_crop_image_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-img-crop-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
-    response = client.post("/api/image/crop", files=file, data={"x": "10", "y": "20", "width": "100", "height": "150"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-img-crop-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 10, 20, 100, 150, original_filename="photo.jpg")
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.convert_image_task.delay")
-def test_convert_image_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-img-convert-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
-    response = client.post("/api/image/convert", files=file, data={"target_format": "png"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-img-convert-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "png", original_filename="photo.jpg")
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.rotate_image_task.delay")
-def test_rotate_image_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-img-rotate-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
-    response = client.post("/api/image/rotate", files=file, data={"angle": "90"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-img-rotate-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], 90, original_filename="photo.jpg")
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.watermark_image_task.delay")
-def test_watermark_image_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-img-watermark-123"
-    mock_delay.return_value = MockTask()
-    file = {"file": ("photo.jpg", b"jpeg_dummy_data", "image/jpeg")}
-    response = client.post("/api/image/watermark", files=file, data={
-        "text": "CONFIDENTIAL",
-        "color": "red",
-        "opacity": "0.5",
-        "position": "center"
-    })
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-img-watermark-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "CONFIDENTIAL", "red", 0.5, "center", original_filename="photo.jpg")
+def _image_file(name: str = "photo.jpg"):
+    return {"file": (name, _make_image_bytes("JPEG"), "image/jpeg")}
 
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.merge_docx_task.delay")
-def test_merge_docx_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-merge-docx-123"
-    mock_delay.return_value = MockTask()
+def test_compress_image_roundtrip(client):
+    response = client.post("/api/image/compress", files=_image_file(), data={"quality": "80"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert "photo_compressed" in response.headers.get("content-disposition", "")
+    Image.open(io.BytesIO(response.content)).verify()
 
+
+def test_compress_image_bad_quality(client):
+    response = client.post("/api/image/compress", files=_image_file(), data={"quality": "150"})
+    assert response.status_code == 400
+
+
+def test_resize_image_roundtrip(client):
+    response = client.post(
+        "/api/image/resize",
+        files=_image_file(),
+        data={"width": "50", "height": "40", "maintain_aspect": "false"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    img = Image.open(io.BytesIO(response.content))
+    assert img.size == (50, 40)
+
+
+def test_resize_image_missing_dims(client):
+    response = client.post("/api/image/resize", files=_image_file(), data={})
+    assert response.status_code == 400
+
+
+def test_crop_image_roundtrip(client):
+    response = client.post(
+        "/api/image/crop",
+        files=_image_file(),
+        data={"x": "10", "y": "10", "width": "40", "height": "30"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert Image.open(io.BytesIO(response.content)).size == (40, 30)
+
+
+def test_crop_image_bad_dims(client):
+    response = client.post(
+        "/api/image/crop",
+        files=_image_file(),
+        data={"x": "0", "y": "0", "width": "0", "height": "10"},
+    )
+    assert response.status_code == 400
+
+
+def test_convert_image_roundtrip(client):
+    response = client.post(
+        "/api/image/convert", files=_image_file(), data={"target_format": "png"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers.get("content-disposition", "").endswith('.png"')
+
+
+def test_convert_image_bad_format(client):
+    response = client.post(
+        "/api/image/convert", files=_image_file(), data={"target_format": "svg"}
+    )
+    assert response.status_code == 400
+
+
+def test_rotate_image_roundtrip(client):
+    response = client.post("/api/image/rotate", files=_image_file(), data={"angle": "90"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert "photo_rotated" in response.headers.get("content-disposition", "")
+
+
+def test_rotate_image_bad_angle(client):
+    response = client.post("/api/image/rotate", files=_image_file(), data={"angle": "45"})
+    assert response.status_code == 400
+
+
+def test_watermark_image_roundtrip(client):
+    response = client.post(
+        "/api/image/watermark",
+        files=_image_file(),
+        data={"text": "CONFIDENTIAL", "color": "red", "opacity": "0.5", "position": "center"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    Image.open(io.BytesIO(response.content)).verify()
+
+
+def test_watermark_image_empty_text(client):
+    # Empty required Form fields are rejected by the framework with 422
+    # (unchanged pre-existing behavior).
+    response = client.post(
+        "/api/image/watermark", files=_image_file(), data={"text": ""}
+    )
+    assert response.status_code == 422
+
+
+def test_merge_docx_roundtrip(client):
     files = [
-        ("files", ("doc1.docx", b"docx_data_1", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
-        ("files", ("doc2.docx", b"docx_data_2", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+        ("files", ("doc1.docx", _make_docx_bytes("one"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+        ("files", ("doc2.docx", _make_docx_bytes("two"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
     ]
     response = client.post("/api/office/merge-docx", files=files)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-merge-docx-123"
-    mock_delay.assert_called_once()
-    assert response.json()["status"] == "queued"
+    assert response.status_code == 200
+    assert response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert "doc1_merged" in response.headers.get("content-disposition", "")
 
 
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.docx_to_images_task.delay")
-def test_docx_to_images_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-docx2img-123"
-    mock_delay.return_value = MockTask()
-
-    file = {"file": ("document.docx", b"docx_data", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
-    response = client.post("/api/office/docx-to-images", files=file, data={"format": "png", "dpi": "150"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-docx2img-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "png", 150, original_filename="document.docx")
-
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.pptx_to_pdf_task.delay")
-def test_pptx_to_pdf_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-pptx2pdf-123"
-    mock_delay.return_value = MockTask()
-
-    file = {"file": ("slides.pptx", b"pptx_data", "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
-    response = client.post("/api/office/pptx-to-pdf", files=file)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-pptx2pdf-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], original_filename="slides.pptx")
-
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.pptx_to_images_task.delay")
-def test_pptx_to_images_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-pptx2img-123"
-    mock_delay.return_value = MockTask()
-
-    file = {"file": ("slides.pptx", b"pptx_data", "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
-    response = client.post("/api/office/pptx-to-images", files=file, data={"format": "jpg", "dpi": "200"})
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-pptx2img-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], "jpg", 200, original_filename="slides.pptx")
-
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.merge_pptx_task.delay")
-def test_merge_pptx_success(mock_delay, mock_open, mock_copy, client):
-    class MockTask:
-        id = "mocked-merge-pptx-123"
-    mock_delay.return_value = MockTask()
-
+def test_merge_docx_single_file_rejected(client):
     files = [
-        ("files", ("slides1.pptx", b"pptx_data_1", "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
-        ("files", ("slides2.pptx", b"pptx_data_2", "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
+        ("files", ("doc1.docx", _make_docx_bytes("one"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+    ]
+    response = client.post("/api/office/merge-docx", files=files)
+    assert response.status_code == 400
+
+
+def test_merge_pptx_roundtrip(client):
+    files = [
+        ("files", ("slides1.pptx", _make_pptx_bytes("one"), "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
+        ("files", ("slides2.pptx", _make_pptx_bytes("two"), "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
     ]
     response = client.post("/api/office/merge-pptx", files=files)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-merge-pptx-123"
-    mock_delay.assert_called_once()
-    assert response.json()["status"] == "queued"
+    assert response.status_code == 200
+    assert response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+    assert "slides1_merged" in response.headers.get("content-disposition", "")
 
 
-@patch("app.tasks.os.path.exists")
-@patch("app.tasks.img2pdf.convert")
-@patch("app.tasks.open")
-@patch("app.tasks.store_processed_file")
-@patch("app.tasks.is_s3_configured")
-def test_images_to_pdf_task_execution(mock_s3_configured, mock_store, mock_open, mock_convert, mock_exists):
+def test_merge_pptx_single_file_rejected(client):
+    files = [
+        ("files", ("slides1.pptx", _make_pptx_bytes("one"), "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
+    ]
+    response = client.post("/api/office/merge-pptx", files=files)
+    assert response.status_code == 400
+
+
+def test_pdf_info_invalid_extension(client):
+    files = {"file": ("test.txt", b"plain text data", "text/plain")}
+    response = client.post("/api/pdf-info", files=files)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only PDF files are supported."
+
+
+def test_images_to_pdf_task_direct():
+    """Direct unit check of the sync images-to-pdf function (no HTTP)."""
+    import os
+    import tempfile
+
     from app.tasks import images_to_pdf_task
-    import img2pdf
-    
-    mock_exists.return_value = True
-    mock_convert.return_value = b"%PDF-1.4 dummy"
-    mock_store.return_value = "http://download.url"
-    mock_s3_configured.return_value = True
-    
-    # We mock os.remove to avoid attempting to delete the mocked files
-    with patch("app.tasks.os.remove") as mock_remove:
-        result = images_to_pdf_task(["img1.png", "img2.jpg"], "original.png")
-        
-    assert result == {
-        "status": "success",
-        "download_url": "http://download.url"
-    }
-    
-    # Extract the actual list of paths passed to mock_convert
-    called_paths, kwargs = mock_convert.call_args
-    assert len(called_paths[0]) == 2
-    assert kwargs == {"rotation": img2pdf.Rotation.ifvalid}
 
-
-@patch("app.main.shutil.copyfileobj")
-@patch("app.main.open")
-@patch("app.main.convert_to_markdown_task.delay")
-def test_convert_to_markdown_success(mock_delay, mock_open, mock_copy, client):
-    """
-    Test that converting a file to Markdown successfully queues a conversion job.
-    """
-    class MockTask:
-        id = "mocked-markdown-123"
-    mock_delay.return_value = MockTask()
-
-    file = {"file": ("doc.docx", b"docx dummy content", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
-    response = client.post("/api/convert-to-markdown", files=file)
-    assert response.status_code == 202
-    assert response.json()["job_id"] == "mocked-markdown-123"
-    mock_delay.assert_called_once_with(mock_delay.call_args[0][0], original_filename="doc.docx")
-
+    with tempfile.TemporaryDirectory() as tmp:
+        p1 = os.path.join(tmp, "a.png")
+        p2 = os.path.join(tmp, "b.jpg")
+        with open(p1, "wb") as f:
+            f.write(_make_image_bytes("PNG"))
+        with open(p2, "wb") as f:
+            f.write(_make_image_bytes("JPEG"))
+        data, name = images_to_pdf_task([p1, p2], "original.png")
+        assert data.startswith(b"%PDF")
+        assert name == "original_compiled.pdf"
+        assert not os.path.exists(p1) and not os.path.exists(p2)

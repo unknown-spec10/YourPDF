@@ -1,61 +1,43 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, FileText, Download, RefreshCw, AlertTriangle } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { useFileJob } from '@/hooks/useFileJob'
+import { submitJob, buildSingleFileFormData } from '@/lib/api'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+const pdfToDocxSubmitter = (file: File) =>
+  submitJob('/api/pdf-to-docx', buildSingleFileFormData(file))
 
 export default function PdfToDocxPage() {
   const [file, setFile] = useState<File | null>(null)
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId, (data) => {
-    // Optional callback on complete
-  })
-
-  // Cleanup job ID state on page exit
-  useEffect(() => {
-    return () => setJobId(null)
-  }, [])
+  const {
+    isSubmitting,
+    isDone,
+    isError,
+    submitError,
+    submit,
+    reset,
+    downloadUrl,
+  } = useFileJob<File>(pdfToDocxSubmitter)
 
   const handleSubmit = async () => {
     if (!file) return
-    setIsSubmitting(true)
-    
-    const formData = new FormData()
-    formData.append('file', file)
-
-    try {
-      const response = await axios.post(`${API_URL}/api/pdf-to-docx`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err: any) {
-      console.error(err)
-      alert(err.response?.data?.detail || 'Failed to initialize conversion task. Please check server connection.')
-    } finally {
-      setIsSubmitting(false)
+    const ok = await submit(file)
+    if (!ok) {
+      alert('Failed to initialize conversion task. Please check server connection.')
     }
   }
 
   const handleReset = () => {
     setFile(null)
-    setJobId(null)
+    reset()
   }
-
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-12 flex-1 flex flex-col justify-center">
@@ -79,7 +61,7 @@ export default function PdfToDocxPage() {
       {/* Main Form Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -90,7 +72,7 @@ export default function PdfToDocxPage() {
             </motion.div>
           )}
 
-          {file && !jobId && (
+          {file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -111,7 +93,7 @@ export default function PdfToDocxPage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {(isSubmitting || isDone || isError) && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
@@ -119,19 +101,19 @@ export default function PdfToDocxPage() {
               className="flex flex-col items-center py-6 text-center"
             >
               {/* Queued / Processing States */}
-              {(isQueued || isProcessing) && (
+              {isSubmitting && (
                 <div className="w-full max-w-md">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Processing task...'}
+                    progress={50}
+                    message="Processing task..."
                   />
                 </div>
               )}
 
               {/* Success State */}
-              {isDone && jobStatus?.result && (
+              {isDone && downloadUrl && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
@@ -142,11 +124,7 @@ export default function PdfToDocxPage() {
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl ?? ''}
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
                       <Download className="h-4 w-4" />
@@ -166,13 +144,13 @@ export default function PdfToDocxPage() {
               {/* Error State */}
               {isError && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Conversion Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'An unexpected error occurred during processing.'}
+                      {submitError || 'An unexpected error occurred during processing.'}
                     </p>
                   </div>
                   <button

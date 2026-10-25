@@ -1,13 +1,16 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
-from typing import Optional
 
 class Settings(BaseSettings):
-    aws_access_key_id: Optional[str] = Field(None, validation_alias="AWS_ACCESS_KEY_ID")
-    aws_secret_access_key: Optional[str] = Field(None, validation_alias="AWS_SECRET_ACCESS_KEY")
-    aws_s3_bucket_name: Optional[str] = Field(None, validation_alias="AWS_S3_BUCKET_NAME")
-    aws_region: str = Field("us-east-1", validation_alias="AWS_REGION")
-    redis_url: str = Field("redis://localhost:6379/0", validation_alias="REDIS_URL")
+    cors_origins: str = Field("http://localhost:3000", validation_alias="CORS_ORIGINS")
+    api_key: str = Field("", validation_alias="API_KEY")
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        raw = (self.cors_origins or "").strip()
+        if not raw:
+            return []
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",

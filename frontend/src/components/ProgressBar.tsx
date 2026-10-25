@@ -11,24 +11,23 @@ export default function ProgressBar({ progress, message }: ProgressBarProps) {
   const clampedProgress = Math.max(0, Math.min(100, progress))
 
   return (
-    <div className="w-full flex flex-col gap-3 py-4">
+    <div className="flex w-full flex-col gap-3 py-4" role="progressbar" aria-valuenow={clampedProgress} aria-valuemin={0} aria-valuemax={100} aria-label={message}>
       {/* Progress Track */}
-      <div className="h-2.5 w-full bg-border/40 backdrop-blur-md rounded-full overflow-hidden relative shadow-inner">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
         <motion.div
-          className="h-full bg-gradient-to-r from-accent via-purple-500 to-accent rounded-full animate-sweep"
+          className="relative h-full overflow-hidden rounded-full bg-accent"
           initial={{ width: 0 }}
           animate={{ width: `${clampedProgress}%` }}
-          transition={{ duration: 0.35, ease: 'easeOut' }}
-          style={{ boxShadow: '0 0 10px 1px rgba(var(--accent-rgb), 0.35)' }}
-        />
+          transition={{ type: 'spring', stiffness: 90, damping: 22 }}
+        >
+          <div className="animate-sweep absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+        </motion.div>
       </div>
 
       {/* Progress Metadata */}
-      <div className="flex justify-between items-center text-sm">
-        <span className="text-muted font-medium animate-pulse-subtle">
-          {message}
-        </span>
-        <span className="text-foreground font-bold font-mono">
+      <div className="flex items-center justify-between text-[13px]">
+        <span className="animate-pulse-soft font-medium text-muted">{message}</span>
+        <span className="font-mono font-semibold tabular-nums text-foreground">
           {clampedProgress}%
         </span>
       </div>

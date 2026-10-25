@@ -3,7 +3,7 @@
 import { useCallback } from 'react'
 import { useDropzone, Accept } from 'react-dropzone'
 import { motion } from 'framer-motion'
-import { UploadCloud } from 'lucide-react'
+import { UploadCloud, AlertCircle } from 'lucide-react'
 
 interface DropZoneProps {
   onFileAccepted: (file: File) => void
@@ -11,6 +11,7 @@ interface DropZoneProps {
   maxSize?: number // In bytes
   disabled?: boolean
   placeholderText?: string
+  error?: string | null
 }
 
 export default function DropZone({
@@ -19,11 +20,12 @@ export default function DropZone({
   maxSize = 52428800, // 50MB default
   disabled = false,
   placeholderText = 'Drop your PDF here',
+  error = null,
 }: DropZoneProps) {
   const onDrop = useCallback(
     (acceptedFiles: File[], rejectedFiles: any[]) => {
       if (disabled) return
-      
+
       if (acceptedFiles.length > 0) {
         onFileAccepted(acceptedFiles[0])
       } else if (rejectedFiles.length > 0) {
@@ -41,7 +43,7 @@ export default function DropZone({
     [onFileAccepted, disabled, maxSize, accept]
   )
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({
     onDrop,
     accept,
     maxSize,
@@ -49,42 +51,68 @@ export default function DropZone({
     disabled,
   })
 
+  const hasError = Boolean(error) || isDragReject
+
   return (
     <div {...getRootProps()} className="w-full cursor-pointer outline-none">
       <input {...getInputProps()} />
       <motion.div
-        whileHover={{ scale: disabled ? 1 : 1.005, y: disabled ? 0 : -2 }}
-        whileTap={{ scale: disabled ? 1 : 0.995 }}
+        whileHover={{ scale: disabled ? 1 : 1.005, y: disabled ? 0 : -1 }}
+        whileTap={{ scale: disabled ? 1 : 0.998 }}
         animate={{
-          borderColor: isDragActive ? 'var(--accent)' : 'color-mix(in srgb, var(--border) 40%, transparent)',
-          backgroundColor: isDragActive 
-            ? 'color-mix(in srgb, var(--accent) 8%, transparent)' 
-            : 'color-mix(in srgb, var(--surface) 40%, transparent)',
-          boxShadow: isDragActive 
-            ? '0 20px 40px -15px rgba(var(--accent-rgb), 0.15), 0 0 0 1px rgba(var(--accent-rgb), 0.2)'
-            : '0 10px 30px -10px rgba(0, 0, 0, 0.15)',
+          borderColor: hasError
+            ? 'var(--danger)'
+            : isDragActive
+              ? 'var(--accent)'
+              : 'var(--border)',
+          backgroundColor: hasError
+            ? 'var(--danger-subtle)'
+            : isDragActive
+              ? 'var(--accent-subtle)'
+              : 'var(--surface)',
         }}
-        transition={{ duration: 0.25, ease: 'easeOut' }}
-        className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-6 sm:p-12 text-center backdrop-blur-lg transition-all relative overflow-hidden ${
-          disabled ? 'opacity-50 cursor-not-allowed' : 'hover:border-accent'
-        }`}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+        role="button"
+        aria-disabled={disabled}
+        aria-invalid={hasError}
+        className={`flex flex-col items-center justify-center rounded-xl border border-dashed p-6 text-center transition-shadow duration-200 sm:p-10 ${
+          disabled ? 'cursor-not-allowed opacity-50' : ''
+        } ${!hasError && !isDragActive ? 'hover:border-accent/60' : ''} focus-visible:outline-2 focus-visible:outline-ring`}
+        style={{ boxShadow: isDragActive ? 'var(--shadow-lg)' : 'var(--shadow-sm)' }}
       >
-        {/* Glow overlay during drag active */}
-        {isDragActive && (
-          <div className="absolute inset-0 bg-gradient-to-br from-accent/5 via-transparent to-accent/5 pointer-events-none" />
-        )}
-        
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/10 text-accent mb-6 shadow-inner">
-          <UploadCloud className={`h-8 w-8 transition-transform duration-300 ${isDragActive ? 'scale-110 -translate-y-1' : 'animate-bounce-subtle'}`} />
+        <div
+          className={`flex h-12 w-12 items-center justify-center rounded-xl transition-colors duration-200 ${
+            hasError
+              ? 'bg-danger-subtle text-danger'
+              : isDragActive
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-surface-2 text-muted'
+          }`}
+        >
+          {hasError ? (
+            <AlertCircle className="h-6 w-6" />
+          ) : (
+            <UploadCloud
+              className={`h-6 w-6 transition-transform duration-300 ${
+                isDragActive ? '-translate-y-0.5 scale-110' : 'animate-float-soft'
+              }`}
+            />
+          )}
         </div>
-        
-        <h3 className="text-xl font-bold text-foreground mb-2">
-          {isDragActive ? 'Release to upload your file' : placeholderText}
+
+        <h3 className="mt-4 text-[15px] font-semibold tracking-tight text-foreground">
+          {hasError && error
+            ? error
+            : isDragActive
+              ? 'Release to upload your file'
+              : placeholderText}
         </h3>
-        <p className="text-sm text-muted">
-          or click to browse from your device
+        <p className="mt-1 text-sm text-muted">
+          {hasError && !error
+            ? 'This file type is not supported — try another file'
+            : 'or click to browse from your device'}
         </p>
-        <p className="text-xs text-muted/50 mt-4 font-mono">
+        <p className="mt-3 font-mono text-xs tabular-nums text-muted/80">
           Maximum file size: {maxSize / 1024 / 1024}MB
         </p>
       </motion.div>

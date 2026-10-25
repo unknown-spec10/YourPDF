@@ -4,23 +4,31 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, RotateCw, Download, RefreshCw, AlertTriangle, RotateCcw } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { useFileJob } from '@/hooks/useFileJob'
+import { submitJob, buildSingleFileFormData } from '@/lib/api'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+type RotateImageArgs = { file: File; angle: number }
+
+const rotateImageSubmitter = ({ file, angle }: RotateImageArgs) =>
+  submitJob('/api/image/rotate', buildSingleFileFormData(file, { angle }))
 
 export default function RotateImagePage() {
   const [file, setFile] = useState<File | null>(null)
   const [imgSrc, setImgSrc] = useState<string>('')
   const [angle, setAngle] = useState<0 | 90 | 180 | 270>(0)
   
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId, () => {})
+  const {
+    isSubmitting,
+    isDone,
+    isError,
+    submitError,
+    submit,
+    reset,
+    downloadUrl,
+  } = useFileJob<RotateImageArgs>(rotateImageSubmitter)
 
   // Object URL preview
   useEffect(() => {
@@ -34,10 +42,6 @@ export default function RotateImagePage() {
       URL.revokeObjectURL(url)
     }
   }, [file])
-
-  useEffect(() => {
-    return () => setJobId(null)
-  }, [])
 
   const handleRotateLeft = () => {
     setAngle((prev) => {
@@ -59,35 +63,17 @@ export default function RotateImagePage() {
 
   const handleSubmit = async () => {
     if (!file || angle === 0) return
-    setIsSubmitting(true)
-
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('angle', String(angle))
-
-    try {
-      const response = await axios.post(`${API_URL}/api/image/rotate`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err) {
-      console.error(err)
+    const ok = await submit({ file, angle })
+    if (!ok) {
       alert('Failed to initialize image rotation task. Please check server connection.')
-    } finally {
-      setIsSubmitting(false)
     }
   }
 
   const handleReset = () => {
     setFile(null)
-    setJobId(null)
+    reset()
     setAngle(0)
   }
-
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-12 flex-1 flex flex-col justify-center">
@@ -111,7 +97,7 @@ export default function RotateImagePage() {
       {/* Main Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -126,7 +112,7 @@ export default function RotateImagePage() {
             </motion.div>
           )}
 
-          {file && !jobId && imgSrc && (
+          {file && !isDone && !isError && !isSubmitting && imgSrc && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -141,7 +127,7 @@ export default function RotateImagePage() {
                 </div>
                 <button
                   onClick={handleReset}
-                  className="text-xs font-semibold text-rose-500 hover:text-rose-600 transition-colors cursor-pointer shrink-0"
+                  className="text-xs font-semibold text-danger hover:text-danger transition-colors cursor-pointer shrink-0"
                 >
                   Remove File
                 </button>
@@ -190,25 +176,25 @@ export default function RotateImagePage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {(isSubmitting || isDone || isError) && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className="flex flex-col items-center py-6 text-center"
             >
-              {(isQueued || isProcessing) && (
+              {isSubmitting && (
                 <div className="w-full max-w-md">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Rotating image...'}
+                    progress={50}
+                    message="Rotating image..."
                   />
                 </div>
               )}
 
-              {isDone && jobStatus?.result && (
+              {isDone && downloadUrl && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
@@ -219,11 +205,7 @@ export default function RotateImagePage() {
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl ?? ''}
                       download
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
@@ -243,13 +225,13 @@ export default function RotateImagePage() {
 
               {isError && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Processing Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'An unexpected error occurred during processing.'}
+                      {submitError || 'An unexpected error occurred during processing.'}
                     </p>
                   </div>
                   <button

@@ -4,20 +4,21 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, RotateCw, Download, RefreshCw, AlertTriangle, Eye, ZoomIn } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { useFileJob } from '@/hooks/useFileJob'
+import { submitJob, buildSingleFileFormData } from '@/lib/api'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+type RotateArgs = { file: File; rotation: number }
+
+const rotateSubmitter = ({ file, rotation }: RotateArgs) =>
+  submitJob('/api/rotate', buildSingleFileFormData(file, { rotation }))
 
 export default function RotatePage() {
   const [file, setFile] = useState<File | null>(null)
   const [rotation, setRotation] = useState<90 | 180 | 270>(90)
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [fileUrl, setFileUrl] = useState<string | null>(null)
   const [isZoomOpen, setIsZoomOpen] = useState(false)
@@ -35,45 +36,29 @@ export default function RotatePage() {
     }
   }, [file])
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId)
-
-  // Cleanup job ID state on page exit
-  useEffect(() => {
-    return () => setJobId(null)
-  }, [])
+  const {
+    isSubmitting,
+    isDone,
+    isError,
+    submitError,
+    submit,
+    reset,
+    downloadUrl,
+  } = useFileJob<RotateArgs>(rotateSubmitter)
 
   const handleSubmit = async () => {
     if (!file) return
-    setIsSubmitting(true)
-    
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('rotation', rotation.toString())
-
-    try {
-      const response = await axios.post(`${API_URL}/api/rotate`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err: any) {
-      console.error(err)
-      alert(err.response?.data?.detail || 'Failed to initialize rotation task. Please check server connection.')
-    } finally {
-      setIsSubmitting(false)
+    const ok = await submit({ file, rotation })
+    if (!ok) {
+      alert('Failed to initialize rotation task. Please check server connection.')
     }
   }
 
   const handleReset = () => {
     setFile(null)
     setRotation(90)
-    setJobId(null)
+    reset()
   }
-
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-12 flex-1 flex flex-col justify-center">
@@ -97,7 +82,7 @@ export default function RotatePage() {
       {/* Main Form Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -108,7 +93,7 @@ export default function RotatePage() {
             </motion.div>
           )}
 
-          {file && !jobId && (
+          {file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -180,7 +165,7 @@ export default function RotatePage() {
                       </div>
                       
                       {/* Hover overlay mask */}
-                      <div className="absolute inset-0 bg-slate-950/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-lg pointer-events-none">
+                      <div className="absolute inset-0 bg-overlay opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-lg pointer-events-none">
                         <div className="p-2.5 rounded-full bg-accent/90 text-accent-foreground shadow-lg">
                           <ZoomIn className="h-5 w-5" />
                         </div>
@@ -197,7 +182,7 @@ export default function RotatePage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {(isSubmitting || isDone || isError) && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
@@ -205,19 +190,19 @@ export default function RotatePage() {
               className="flex flex-col items-center py-6 text-center"
             >
               {/* Queued / Processing States */}
-              {(isQueued || isProcessing) && (
+              {isSubmitting && (
                 <div className="w-full max-w-md">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Rotating PDF pages...'}
+                    progress={50}
+                    message="Rotating PDF pages..."
                   />
                 </div>
               )}
 
               {/* Success State */}
-              {isDone && jobStatus?.result && (
+              {isDone && downloadUrl && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
@@ -228,11 +213,7 @@ export default function RotatePage() {
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl ?? ''}
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
                       <Download className="h-4 w-4" />
@@ -259,13 +240,13 @@ export default function RotatePage() {
               {/* Error State */}
               {isError && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Rotation Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'An unexpected error occurred during processing.'}
+                      {submitError || 'An unexpected error occurred during processing.'}
                     </p>
                   </div>
                   <button
@@ -282,22 +263,18 @@ export default function RotatePage() {
         </AnimatePresence>
       </div>
 
-      {isDone && jobStatus?.result && (
+      {isDone && downloadUrl && (
         <PdfPreviewModal
           isOpen={isPreviewOpen}
           onClose={() => setIsPreviewOpen(false)}
-          pdfUrl={
-            jobStatus.result.download_url.startsWith('http')
-              ? jobStatus.result.download_url
-              : `${API_URL}${jobStatus.result.download_url}`
-          }
+          pdfUrl={downloadUrl ?? ''}
           fileName={file?.name ? `${file.name.replace(/\.[^/.]+$/, "")}_rotated.pdf` : "rotated.pdf"}
         />
       )}
 
       {/* Rotate Zoom Preview Modal */}
       {isZoomOpen && fileUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-overlay backdrop-blur-sm">
           <div className="relative w-full max-w-4xl h-[85vh] rounded-2xl border border-card-border bg-surface flex flex-col p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <div className="flex flex-col">
@@ -306,7 +283,7 @@ export default function RotatePage() {
               </div>
               <button
                 onClick={() => setIsZoomOpen(false)}
-                className="text-muted hover:text-foreground cursor-pointer transition-colors px-4 py-2 rounded-xl border border-border bg-background hover:bg-surface-hover font-semibold"
+                className="text-muted hover:text-foreground cursor-pointer transition-colors px-4 py-2 rounded-xl border border-border bg-background hover:bg-surface-2 font-semibold"
               >
                 Close
               </button>

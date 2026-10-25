@@ -1,41 +1,39 @@
 version: '3.8'
 
-# Shared Logging Configuration
-x-logging-options: &logging-options
-  awslogs-group: "yourpdf-production-logs"
-  awslogs-region: "${AWS_REGION:-ap-south-1}"
-  awslogs-create-group: "true"
-
 services:
   redis:
     image: redis:7-alpine
     container_name: yourpdf-prod-redis
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-dev-redis-password}"]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
     restart: always
-    logging:
-      driver: "awslogs"
-      options:
-        <<: *logging-options
-        awslogs-stream: "redis"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   backend:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-backend:latest
     container_name: yourpdf-prod-backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
     volumes:
       - tmp_data:/app/tmp
       - static_data:/app/static
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME}
-      - AWS_REGION=${AWS_REGION}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-dev-redis-password}@redis:6379/0
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: always
-    logging:
-      driver: "awslogs"
-      options:
-        <<: *logging-options
-        awslogs-stream: "backend"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   celery_worker:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-backend:latest
@@ -45,27 +43,37 @@ services:
       - tmp_data:/app/tmp
       - static_data:/app/static
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME}
-      - AWS_REGION=${AWS_REGION}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-dev-redis-password}@redis:6379/0
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: always
-    logging:
-      driver: "awslogs"
-      options:
-        <<: *logging-options
-        awslogs-stream: "celery-worker"
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app.celery inspect ping | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  flower:
+    image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-backend:latest
+    container_name: yourpdf-prod-flower
+    command: celery -A app.celery_app.celery flower --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-dev-flower-password}
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-dev-redis-password}@redis:6379/0
+      - FLOWER_USER=${FLOWER_USER:-admin}
+      - FLOWER_PASSWORD=${FLOWER_PASSWORD:-dev-flower-password}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: always
 
   frontend:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-frontend:latest
     container_name: yourpdf-prod-frontend
     restart: always
-    logging:
-      driver: "awslogs"
-      options:
-        <<: *logging-options
-        awslogs-stream: "frontend"
 
   nginx:
     image: ${DOCKERHUB_USERNAME:-unknowndockerishere}/yourpdf-nginx:latest
@@ -73,14 +81,11 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - frontend
-      - backend
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
     restart: always
-    logging:
-      driver: "awslogs"
-      options:
-        <<: *logging-options
-        awslogs-stream: "nginx"
 
 volumes:
   tmp_data:

@@ -4,46 +4,58 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, Unlock, Download, RefreshCw, AlertTriangle, Key, Eye } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { API_URL, apiKeyHeaders, buildSingleFileFormData } from '@/lib/api'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
 export default function UnlockPage() {
   const [file, setFile] = useState<File | null>(null)
   const [password, setPassword] = useState('')
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isDone, setIsDone] = useState(false)
+  const [isError, setIsError] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId)
-
-  // Cleanup job ID state on page exit
+  // Revoke blob download URL on unmount
   useEffect(() => {
-    return () => setJobId(null)
-  }, [])
+    return () => {
+      if (downloadUrl) URL.revokeObjectURL(downloadUrl)
+    }
+  }, [downloadUrl])
+
+  const downloadFileName = file?.name ? `${file.name.replace(/\.[^/.]+$/, "")}_unlocked.pdf` : "unlocked.pdf"
 
   const handleSubmit = async () => {
     if (!file || !password) return
     setIsSubmitting(true)
-    
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('password', password)
-
+    setIsError(false)
+    setErrorMessage('')
     try {
-      const response = await axios.post(`${API_URL}/api/unlock`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err: any) {
-      console.error(err)
-      alert(err.response?.data?.detail || 'Failed to initialize decryption task. Please check password and server connection.')
+      const formData = buildSingleFileFormData(file, { password })
+      const res = await fetch(`${API_URL}/api/unlock`, { method: 'POST', body: formData, headers: apiKeyHeaders() })
+      if (!res.ok) {
+        let detail = 'Check your password or file. The decryption failed.'
+        try {
+          const data = await res.json()
+          if (data?.detail) detail = data.detail
+        } catch {
+          // keep default message
+        }
+        throw new Error(detail)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
+      setDownloadUrl(url)
+      setIsDone(true)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Check your password or file. The decryption failed.'
+      setErrorMessage(message)
+      setIsError(true)
+      alert('Failed to initialize decryption task. Please check password and server connection.')
     } finally {
       setIsSubmitting(false)
     }
@@ -52,13 +64,15 @@ export default function UnlockPage() {
   const handleReset = () => {
     setFile(null)
     setPassword('')
-    setJobId(null)
+    setIsDone(false)
+    setIsError(false)
+    setErrorMessage('')
+    if (downloadUrl) URL.revokeObjectURL(downloadUrl)
+    setDownloadUrl(null)
   }
 
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
+  const showForm = file && !isDone && !isError
+  const showResult = isDone || isError
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-12 flex-1 flex flex-col justify-center">
@@ -82,7 +96,7 @@ export default function UnlockPage() {
       {/* Main Form Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !showResult && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -93,7 +107,7 @@ export default function UnlockPage() {
             </motion.div>
           )}
 
-          {file && !jobId && (
+          {showForm && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -129,27 +143,27 @@ export default function UnlockPage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {showResult && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className="flex flex-col items-center py-6 text-center"
             >
-              {/* Queued / Processing States */}
-              {(isQueued || isProcessing) && (
+              {/* Submitting State */}
+              {isSubmitting && (
                 <div className="w-full max-w-md">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Decrypting/Unlocking PDF...'}
+                    progress={50}
+                    message="Decrypting/Unlocking PDF..."
                   />
                 </div>
               )}
 
               {/* Success State */}
-              {isDone && jobStatus?.result && (
+              {isDone && downloadUrl && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
@@ -160,11 +174,8 @@ export default function UnlockPage() {
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl}
+                      download={downloadFileName}
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
                       <Download className="h-4 w-4" />
@@ -191,13 +202,13 @@ export default function UnlockPage() {
               {/* Error State */}
               {isError && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Decryption Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'Check your password or file. The decryption failed.'}
+                      {errorMessage || 'Check your password or file. The decryption failed.'}
                     </p>
                   </div>
                   <button
@@ -214,16 +225,12 @@ export default function UnlockPage() {
         </AnimatePresence>
       </div>
 
-      {isDone && jobStatus?.result && (
+      {isDone && downloadUrl && (
         <PdfPreviewModal
           isOpen={isPreviewOpen}
           onClose={() => setIsPreviewOpen(false)}
-          pdfUrl={
-            jobStatus.result.download_url.startsWith('http')
-              ? jobStatus.result.download_url
-              : `${API_URL}${jobStatus.result.download_url}`
-          }
-          fileName={file?.name ? `${file.name.replace(/\.[^/.]+$/, "")}_unlocked.pdf` : "unlocked.pdf"}
+          pdfUrl={downloadUrl}
+          fileName={downloadFileName}
         />
       )}
     </div>

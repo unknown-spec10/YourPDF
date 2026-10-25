@@ -4,20 +4,21 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, Grid, Download, RefreshCw, AlertTriangle, HelpCircle, Eye, ZoomIn } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { useFileJob } from '@/hooks/useFileJob'
+import { apiClient, submitJob, buildSingleFileFormData } from '@/lib/api'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+type OrganizeArgs = { file: File; page_order: string }
+
+const organizeSubmitter = ({ file, page_order }: OrganizeArgs) =>
+  submitJob('/api/organize', buildSingleFileFormData(file, { page_order }))
 
 export default function OrganizePage() {
   const [file, setFile] = useState<File | null>(null)
   const [pageOrder, setPageOrder] = useState('')
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [fileUrl, setFileUrl] = useState<string | null>(null)
   const [numPages, setNumPages] = useState<number | null>(null)
@@ -31,7 +32,7 @@ export default function OrganizePage() {
 
       const formData = new FormData()
       formData.append('file', file)
-      axios.post(`${API_URL}/api/pdf-info`, formData)
+      apiClient.post('/api/pdf-info', formData)
         .then((res) => {
           setNumPages(res.data.num_pages)
         })
@@ -90,46 +91,30 @@ export default function OrganizePage() {
 
   const omittedPages = getOmittedPages()
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId)
-
-  // Cleanup job ID state on page exit
-  useEffect(() => {
-    return () => setJobId(null)
-  }, [])
+  const {
+    isSubmitting,
+    isDone,
+    isError,
+    submitError,
+    submit,
+    reset,
+    downloadUrl,
+  } = useFileJob<OrganizeArgs>(organizeSubmitter)
 
   const handleSubmit = async () => {
     if (!file || !pageOrder) return
-    setIsSubmitting(true)
-    
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('page_order', pageOrder)
-
-    try {
-      const response = await axios.post(`${API_URL}/api/organize`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err: any) {
-      console.error(err)
-      alert(err.response?.data?.detail || 'Failed to initialize organize task. Please check server connection.')
-    } finally {
-      setIsSubmitting(false)
+    const ok = await submit({ file, page_order: pageOrder })
+    if (!ok) {
+      alert('Failed to initialize organize task. Please check server connection.')
     }
   }
 
   const handleReset = () => {
     setFile(null)
     setPageOrder('')
-    setJobId(null)
+    reset()
     setNumPages(null)
   }
-
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
 
   return (
     <div className={`mx-auto w-full px-6 py-12 flex-1 flex flex-col justify-center transition-all duration-300 ${file ? 'max-w-[1400px]' : 'max-w-3xl'}`}>
@@ -153,7 +138,7 @@ export default function OrganizePage() {
       {/* Main Form Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -164,7 +149,7 @@ export default function OrganizePage() {
             </motion.div>
           )}
 
-          {file && !jobId && (
+          {file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -253,13 +238,13 @@ export default function OrganizePage() {
                                 onClick={() => item.isValid && setZoomPage(item.pageNum)}
                                 className={`relative aspect-[3/4] p-2 rounded-lg border flex flex-col justify-between items-center transition-all group cursor-pointer ${
                                   !item.isValid
-                                    ? 'border-rose-500 bg-rose-500/10 shadow-[0_0_12px_rgba(239,68,68,0.15)]'
+                                    ? 'border-danger bg-danger-subtle shadow-sm'
                                     : item.isDuplicate
-                                    ? 'border-amber-500 bg-amber-500/10 shadow-[0_0_12px_rgba(245,158,11,0.15)] hover:border-amber-400 hover:shadow-[0_0_16px_rgba(245,158,11,0.25)]'
+                                    ? 'border-warning bg-warning-subtle shadow-sm hover:border-warning hover:shadow-md'
                                     : 'border-accent bg-accent/5 hover:border-accent hover:shadow-[0_0_16px_rgba(var(--accent-rgb),0.25)]'
                                 }`}
                               >
-                                <div className="text-[9px] font-bold text-muted-foreground uppercase tracking-wider mb-1">
+                                <div className="text-[9px] font-bold text-muted uppercase tracking-wider mb-1">
                                   Pos {idx + 1}
                                 </div>
 
@@ -273,7 +258,7 @@ export default function OrganizePage() {
                                         title={`Page ${item.pageNum}`}
                                       />
                                       {/* Hover Overlay */}
-                                      <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity pointer-events-none">
+                                      <div className="absolute inset-0 bg-overlay opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity pointer-events-none">
                                         <div className="p-2 rounded-full bg-accent/90 text-accent-foreground shadow-lg">
                                           <ZoomIn className="h-4 w-4" />
                                         </div>
@@ -286,9 +271,9 @@ export default function OrganizePage() {
                                   )}
                                 </div>
 
-                                <div className="flex w-full items-center justify-between px-1 text-[9px] font-bold text-muted-foreground">
+                                <div className="flex w-full items-center justify-between px-1 text-[9px] font-bold text-muted">
                                   <span>Src: {item.pageNum}</span>
-                                  <span className={!item.isValid ? 'text-rose-400' : item.isDuplicate ? 'text-amber-400' : 'text-accent'}>
+                                  <span className={!item.isValid ? 'text-danger' : item.isDuplicate ? 'text-warning' : 'text-accent'}>
                                     {!item.isValid ? 'Invalid' : item.isDuplicate ? 'Copy' : 'Original'}
                                   </span>
                                 </div>
@@ -330,7 +315,7 @@ export default function OrganizePage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {(isSubmitting || isDone || isError) && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
@@ -338,19 +323,19 @@ export default function OrganizePage() {
               className="flex flex-col items-center py-6 text-center"
             >
               {/* Queued / Processing States */}
-              {(isQueued || isProcessing) && (
+              {isSubmitting && (
                 <div className="w-full max-w-md">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Organizing PDF pages...'}
+                    progress={50}
+                    message="Organizing PDF pages..."
                   />
                 </div>
               )}
 
               {/* Success State */}
-              {isDone && jobStatus?.result && (
+              {isDone && downloadUrl && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
@@ -361,11 +346,7 @@ export default function OrganizePage() {
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl ?? ''}
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
                       <Download className="h-4 w-4" />
@@ -392,13 +373,13 @@ export default function OrganizePage() {
               {/* Error State */}
               {isError && (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Organization Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'Verify your page order input. Reorganization failed.'}
+                      {submitError || 'Verify your page order input. Reorganization failed.'}
                     </p>
                   </div>
                   <button
@@ -415,22 +396,18 @@ export default function OrganizePage() {
         </AnimatePresence>
       </div>
 
-      {isDone && jobStatus?.result && (
+      {isDone && downloadUrl && (
         <PdfPreviewModal
           isOpen={isPreviewOpen}
           onClose={() => setIsPreviewOpen(false)}
-          pdfUrl={
-            jobStatus.result.download_url.startsWith('http')
-              ? jobStatus.result.download_url
-              : `${API_URL}${jobStatus.result.download_url}`
-          }
+          pdfUrl={downloadUrl ?? ''}
           fileName={file?.name ? `${file.name.replace(/\.[^/.]+$/, "")}_organized.pdf` : "organized.pdf"}
         />
       )}
 
       {/* Interactive Page Zoom Modal */}
       {zoomPage !== null && fileUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-overlay backdrop-blur-sm">
           <div className="relative w-full max-w-4xl h-[85vh] rounded-2xl border border-card-border bg-surface flex flex-col p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <div className="flex flex-col">
@@ -439,7 +416,7 @@ export default function OrganizePage() {
               </div>
               <button
                 onClick={() => setZoomPage(null)}
-                className="text-muted hover:text-foreground cursor-pointer transition-colors px-4 py-2 rounded-xl border border-border bg-background hover:bg-surface-hover font-semibold"
+                className="text-muted hover:text-foreground cursor-pointer transition-colors px-4 py-2 rounded-xl border border-border bg-background hover:bg-surface-2 font-semibold"
               >
                 Close
               </button>

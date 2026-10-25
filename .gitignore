@@ -12,4 +12,14 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-docs/
+# Junk files (keep tracked history clean)
+.env
+*.env
+backend/tmp/
+backend/static/outputs/
+.pytest_cache/
+__pycache__/
+*.pyc
+frontend/.next/
+node_modules/
+.DS_Store

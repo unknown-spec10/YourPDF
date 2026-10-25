@@ -1,70 +1,59 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, FileText, Settings, Download, RefreshCw, AlertTriangle, Copy, Check, FileDown, Search } from 'lucide-react'
-import axios from 'axios'
 import DropZone from '@/components/DropZone'
 import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
-import { useJobPolling } from '@/hooks/useJobPolling'
+import { useFileJob } from '@/hooks/useFileJob'
+import { submitJob, buildSingleFileFormData } from '@/lib/api'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+type ExtractTextArgs = { file: File; export_txt: boolean }
+
+const extractTextSubmitter = ({ file, export_txt }: ExtractTextArgs) =>
+  submitJob('/api/extract-text', buildSingleFileFormData(file, { export_txt }))
 
 export default function ExtractTextPage() {
   const [file, setFile] = useState<File | null>(null)
   const [exportTxt, setExportTxt] = useState(false)
-  const [jobId, setJobId] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
   
   // Text display states
   const [copied, setCopied] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [extractedText, setExtractedText] = useState('')
 
-  // Job Polling Hook
-  const { data: jobStatus, error: pollError } = useJobPolling(jobId, (data) => {
-    // Auto trigger disabled - file downloads only when user clicks download button
-    if (data.result?.extracted_text) {
-      setExtractedText(data.result.extracted_text)
-    }
+  const {
+    isSubmitting,
+    isDone,
+    isError,
+    submitError,
+    submit,
+    reset,
+    downloadUrl,
+  } = useFileJob<ExtractTextArgs>(extractTextSubmitter, {
+    onDone: (result) => {
+      const text = result.text ?? result.extracted_text
+      if (typeof text === 'string' && text) {
+        setExtractedText(text)
+      }
+    },
   })
-
-  // Cleanup job ID state on page exit
-  useEffect(() => {
-    return () => {
-      setJobId(null)
-      setExtractedText('')
-    }
-  }, [])
 
   const handleSubmit = async () => {
     if (!file) return
-    setIsSubmitting(true)
     setExtractedText('')
-    
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('export_txt', exportTxt.toString())
-
-    try {
-      const response = await axios.post(`${API_URL}/api/extract-text`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setJobId(response.data.job_id)
-    } catch (err: any) {
-      console.error(err)
-      alert(err.response?.data?.detail || 'Failed to initialize text extraction. Please check server connection.')
-    } finally {
-      setIsSubmitting(false)
+    const ok = await submit({ file, export_txt: exportTxt })
+    if (!ok) {
+      alert('Failed to initialize text extraction. Please check server connection.')
     }
   }
 
   const handleReset = () => {
     setFile(null)
-    setJobId(null)
+    reset()
     setExtractedText('')
     setSearchQuery('')
   }
@@ -75,11 +64,6 @@ export default function ExtractTextPage() {
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
-
-  const isQueued = jobStatus?.status === 'queued'
-  const isProcessing = jobStatus?.status === 'processing'
-  const isDone = jobStatus?.status === 'done'
-  const isError = jobStatus?.status === 'error' || !!pollError
 
   // Highlight matches in the extracted text (simple search display)
   const getFilteredText = () => {
@@ -113,7 +97,7 @@ export default function ExtractTextPage() {
       {/* Main Box */}
       <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
         <AnimatePresence mode="wait">
-          {!file && !jobId && (
+          {!file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="dropzone"
               initial={{ opacity: 0, y: 10 }}
@@ -124,7 +108,7 @@ export default function ExtractTextPage() {
             </motion.div>
           )}
 
-          {file && !jobId && (
+          {file && !isDone && !isError && !isSubmitting && (
             <motion.div
               key="file-selected"
               initial={{ opacity: 0, y: 10 }}
@@ -195,7 +179,7 @@ export default function ExtractTextPage() {
             </motion.div>
           )}
 
-          {jobId && (
+          {(isSubmitting || isDone || isError) && (
             <motion.div
               key="processing-state"
               initial={{ opacity: 0, y: 10 }}
@@ -203,19 +187,19 @@ export default function ExtractTextPage() {
               className="flex flex-col items-center py-2 text-center"
             >
               {/* Queued / Processing States */}
-              {(isQueued || isProcessing) && (
+              {isSubmitting && (
                 <div className="w-full max-w-md py-6">
                   <ProgressBar
-                    progress={jobStatus?.progress || 0}
-                    message={jobStatus?.message || 'Extracting PDF text content...'}
+                    progress={50}
+                    message="Extracting PDF text content..."
                   />
                 </div>
               )}
 
               {/* Success State - Export TXT */}
-              {isDone && exportTxt && jobStatus?.result && (
+              {isDone && exportTxt && downloadUrl && (
                 <div className="flex flex-col items-center gap-4 py-6">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
                     <Download className="h-7 w-7" />
                   </div>
                   <div>
@@ -226,11 +210,7 @@ export default function ExtractTextPage() {
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
                     <a
-                      href={
-                        jobStatus.result.download_url.startsWith('http')
-                          ? jobStatus.result.download_url
-                          : `${API_URL}${jobStatus.result.download_url}`
-                      }
+                      href={downloadUrl ?? ''}
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                     >
                       <Download className="h-4 w-4" />
@@ -264,8 +244,8 @@ export default function ExtractTextPage() {
                       >
                         {copied ? (
                           <>
-                            <Check className="h-3.5 w-3.5 text-emerald-500" />
-                            <span className="text-emerald-500">Copied</span>
+                            <Check className="h-3.5 w-3.5 text-success" />
+                            <span className="text-success">Copied</span>
                           </>
                         ) : (
                           <>
@@ -306,13 +286,13 @@ export default function ExtractTextPage() {
               {/* Error State */}
               {isError && (
                 <div className="flex flex-col items-center gap-4 py-6">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 mb-2">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
                     <AlertTriangle className="h-7 w-7" />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold">Extraction Failed</h3>
                     <p className="text-sm text-muted mt-1">
-                      {jobStatus?.message || 'An unexpected error occurred during processing.'}
+                      {submitError || 'An unexpected error occurred during processing.'}
                     </p>
                   </div>
                   <button

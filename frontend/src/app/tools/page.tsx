@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -25,7 +25,7 @@ import {
   Maximize,
   RefreshCw,
   Presentation,
-  FileCode
+  Search
 } from 'lucide-react'
 
 interface Tool {
@@ -36,8 +36,11 @@ interface Tool {
   type: 'client' | 'server'
 }
 
+type Category = 'pdf' | 'image' | 'office'
+
 export default function ToolsPage() {
-  const [activeCategory, setActiveCategory] = useState<'pdf' | 'image' | 'office'>('pdf')
+  const [activeCategory, setActiveCategory] = useState<Category>('pdf')
+  const [query, setQuery] = useState('')
 
   const pdfTools: Tool[] = [
     {
@@ -228,13 +231,6 @@ export default function ToolsPage() {
       icon: Layers,
       type: 'server',
     },
-    {
-      name: 'Convert to Markdown',
-      description: 'Convert PDF, Word, PowerPoint, Excel, HTML, and images to clean Markdown.',
-      href: '/markitdown',
-      icon: FileCode,
-      type: 'server',
-    },
   ]
 
   const containerVariants = {
@@ -242,189 +238,197 @@ export default function ToolsPage() {
     show: {
       opacity: 1,
       transition: {
-        staggerChildren: 0.05,
+        staggerChildren: 0.04,
       },
     },
   }
 
   const itemVariants = {
-    hidden: { opacity: 0, y: 16 },
-    show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 100 } },
+    hidden: { opacity: 0, y: 14 },
+    show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' as const } },
   }
 
-  const themeMap = {
-    pdf: {
-      accent: 'text-indigo-500 bg-indigo-500/10 group-hover:bg-indigo-500 group-hover:text-white shadow-sm',
-      border: 'hover:border-indigo-500/40 hover:shadow-[0_0_25px_-5px_rgba(99,102,241,0.22)]',
-      badge: 'bg-indigo-500/10 text-indigo-500 border border-indigo-500/10',
-      activeText: 'text-indigo-500',
-      activeBar: 'bg-indigo-500'
-    },
-    image: {
-      accent: 'text-emerald-500 bg-emerald-500/10 group-hover:bg-emerald-500 group-hover:text-white shadow-sm',
-      border: 'hover:border-emerald-500/40 hover:shadow-[0_0_25px_-5px_rgba(16,185,129,0.22)]',
-      badge: 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/10',
-      activeText: 'text-emerald-500',
-      activeBar: 'bg-emerald-500'
-    },
-    office: {
-      accent: 'text-amber-500 bg-amber-500/10 group-hover:bg-amber-500 group-hover:text-white shadow-sm',
-      border: 'hover:border-amber-500/40 hover:shadow-[0_0_25px_-5px_rgba(245,158,11,0.22)]',
-      badge: 'bg-amber-500/10 text-amber-500 border border-amber-500/10',
-      activeText: 'text-amber-500',
-      activeBar: 'bg-amber-500'
-    }
-  }
+  const categories: { id: Category; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { id: 'pdf', label: 'PDF', icon: File },
+    { id: 'image', label: 'Image', icon: ImageIcon },
+    { id: 'office', label: 'Office', icon: Presentation },
+  ]
 
-  const currentTheme = themeMap[activeCategory]
-  const displayedTools = 
-    activeCategory === 'pdf' 
-      ? pdfTools 
-      : activeCategory === 'image' 
-      ? imageTools 
-      : officeTools
+  const allTools = useMemo(
+    () => ({ pdf: pdfTools, image: imageTools, office: officeTools }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
+
+  const displayedTools = useMemo(() => {
+    const base = allTools[activeCategory]
+    const q = query.trim().toLowerCase()
+    if (!q) return base
+    return base.filter(
+      (t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)
+    )
+  }, [allTools, activeCategory, query])
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-6 py-12 md:py-20 transition-all duration-200">
+    <div className="mx-auto w-full max-w-6xl px-5 py-12 sm:px-6 md:py-16">
       {/* Title */}
-      <section className="mb-12">
-        <h1 className="text-3xl font-black tracking-tight text-foreground sm:text-4xl md:text-5xl">
-          All Workspace Utilities
-        </h1>
-        <p className="text-muted mt-2 text-base md:text-lg">
-          Simple, fast, and privacy-first utilities for all your document and image operations.
-        </p>
+      <section className="mb-8 md:mb-10">
+        <motion.h1
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="text-3xl font-extrabold tracking-tight text-foreground md:text-4xl"
+        >
+          All tools
+        </motion.h1>
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.4, delay: 0.08 }}
+          className="mt-2 max-w-xl text-[15px] leading-relaxed text-muted"
+        >
+          Fast, private utilities for documents and images. Filter by suite or search by name.
+        </motion.p>
       </section>
 
-      {/* Tabs Selector */}
-      <div className="flex border-b border-border/40 gap-8 mb-12 relative overflow-x-auto whitespace-nowrap">
-        <button
-          type="button"
-          onClick={() => setActiveCategory('pdf')}
-          className={`pb-4 text-lg font-bold transition-all relative cursor-pointer select-none outline-none ${
-            activeCategory === 'pdf' ? 'text-indigo-500' : 'text-muted hover:text-foreground'
-          }`}
-        >
-          <span className="flex items-center gap-2">
-            <File className="h-5 w-5" />
-            PDF Utilities
-          </span>
-          {activeCategory === 'pdf' && (
-            <motion.div
-              layoutId="activeCategoryTab"
-              className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500"
-              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            />
-          )}
-        </button>
+      {/* Controls: tabs + search */}
+      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex gap-1 rounded-xl border border-border bg-surface p-1 sm:w-fit" role="tablist" aria-label="Tool categories">
+          {categories.map((cat) => {
+            const Icon = cat.icon
+            const isActive = activeCategory === cat.id
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveCategory(cat.id)}
+                className={`relative flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-150 cursor-pointer sm:flex-none ${
+                  isActive ? 'text-foreground' : 'text-muted hover:text-foreground'
+                }`}
+              >
+                {isActive && (
+                  <motion.div
+                    layoutId="activeCategoryPill"
+                    className="absolute inset-0 rounded-lg bg-surface-2 ring-1 ring-border"
+                    transition={{ type: 'spring', stiffness: 400, damping: 34 }}
+                  />
+                )}
+                <span className="relative flex items-center gap-2">
+                  <Icon className="h-4 w-4" />
+                  {cat.label}
+                </span>
+              </button>
+            )
+          })}
+        </div>
 
-        <button
-          type="button"
-          onClick={() => setActiveCategory('image')}
-          className={`pb-4 text-lg font-bold transition-all relative cursor-pointer select-none outline-none ${
-            activeCategory === 'image' ? 'text-emerald-500' : 'text-muted hover:text-foreground'
-          }`}
-        >
-          <span className="flex items-center gap-2">
-            <ImageIcon className="h-5 w-5" />
-            Image Utilities
-          </span>
-          {activeCategory === 'image' && (
-            <motion.div
-              layoutId="activeCategoryTab"
-              className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500"
-              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            />
-          )}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveCategory('office')}
-          className={`pb-4 text-lg font-bold transition-all relative cursor-pointer select-none outline-none ${
-            activeCategory === 'office' ? 'text-amber-500' : 'text-muted hover:text-foreground'
-          }`}
-        >
-          <span className="flex items-center gap-2">
-            <Presentation className="h-5 w-5" />
-            Office Utilities
-          </span>
-          {activeCategory === 'office' && (
-            <motion.div
-              layoutId="activeCategoryTab"
-              className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500"
-              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            />
-          )}
-        </button>
+        <label className="relative block w-full md:max-w-xs">
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-muted" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`Search ${activeCategory} tools…`}
+            aria-label="Search tools"
+            className="h-10 w-full rounded-lg border border-border bg-surface pr-3 pl-10 text-sm text-foreground placeholder:text-muted/70 focus:border-accent focus:ring-2 focus:ring-ring focus:outline-none"
+          />
+        </label>
       </div>
+
+      {/* Result count */}
+      <p className="mb-4 text-[13px] font-medium text-muted" aria-live="polite">
+        {displayedTools.length} {displayedTools.length === 1 ? 'tool' : 'tools'}
+        {query.trim() ? (
+          <>
+            {' '}matching <span className="text-foreground">“{query.trim()}”</span>
+          </>
+        ) : (
+          <> in {activeCategory}</>
+        )}
+      </p>
 
       {/* Grid of Tools with Animated Transition */}
       <AnimatePresence mode="wait">
         <motion.div
           key={activeCategory}
-          initial={{ opacity: 0, x: activeCategory === 'pdf' ? -15 : activeCategory === 'image' ? 0 : 15 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: activeCategory === 'pdf' ? 15 : activeCategory === 'image' ? 0 : -15 }}
-          transition={{ duration: 0.22, ease: 'easeInOut' }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.2, ease: 'easeInOut' }}
         >
-          <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate="show"
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-          >
-            {displayedTools.map((tool) => {
-              const Icon = tool.icon
-              return (
-                <motion.div key={tool.name} variants={itemVariants}>
-                  <Link
-                    href={tool.href}
-                    className={`flex flex-col h-full rounded-2xl border border-card-border/60 bg-surface/35 backdrop-blur-md p-6 hover:-translate-y-1 transition-all duration-300 group relative overflow-hidden ${currentTheme.border}`}
-                  >
-                    {/* Processing Badge */}
-                    <div className="absolute top-6 right-6">
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                          tool.type === 'client'
-                            ? 'bg-emerald-500/10 text-emerald-500'
-                            : currentTheme.badge
-                        }`}
-                      >
-                        {tool.type === 'client' ? (
-                          <>
-                            <Cpu className="h-3 w-3" />
-                            <span>Local</span>
-                          </>
-                        ) : (
-                          <>
-                            <Server className="h-3 w-3" />
-                            <span>Cloud Secure</span>
-                          </>
-                        )}
-                      </span>
-                    </div>
+          {displayedTools.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-border bg-surface px-6 py-16 text-center">
+              <p className="text-[15px] font-semibold text-foreground">No tools found</p>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
+                Nothing in {activeCategory} matches “{query.trim()}”. Try a different keyword or browse another suite.
+              </p>
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="mt-5 inline-flex h-10 items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold text-foreground transition-colors hover:bg-surface-2 cursor-pointer"
+              >
+                Clear search
+              </button>
+            </div>
+          ) : (
+            <motion.div
+              variants={containerVariants}
+              initial="hidden"
+              animate="show"
+              className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"
+            >
+              {displayedTools.map((tool) => {
+                const Icon = tool.icon
+                return (
+                  <motion.div key={tool.name} variants={itemVariants}>
+                    <Link
+                      href={tool.href}
+                      className="group flex h-full flex-col rounded-2xl border border-border bg-surface p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-lg"
+                    >
+                      {/* Badge */}
+                      <div className="mb-5 flex items-start justify-between gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-surface-2 text-foreground transition-colors duration-150 group-hover:border-accent/30 group-hover:text-accent">
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                            tool.type === 'client'
+                              ? 'bg-success-subtle text-success'
+                              : 'bg-surface-2 text-muted ring-1 ring-border'
+                          }`}
+                        >
+                          {tool.type === 'client' ? (
+                            <>
+                              <Cpu className="h-3 w-3" />
+                              <span>Local</span>
+                            </>
+                          ) : (
+                            <>
+                              <Server className="h-3 w-3" />
+                              <span>Cloud secure</span>
+                            </>
+                          )}
+                        </span>
+                      </div>
 
-                    {/* Icon */}
-                    <div className={`mb-6 flex h-12 w-12 items-center justify-center rounded-xl transition-colors duration-200 ${currentTheme.accent}`}>
-                      <Icon className="h-6 w-6" />
-                    </div>
-
-                    {/* Content */}
-                    <div className="mt-auto">
-                      <h3 className={`text-xl font-bold text-foreground transition-colors duration-200 flex items-center gap-1 group-hover:${currentTheme.activeText}`}>
-                        <span>{tool.name}</span>
-                        <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all duration-200" />
-                      </h3>
-                      <p className="text-muted mt-2 text-sm leading-relaxed">
-                        {tool.description}
-                      </p>
-                    </div>
-                  </Link>
-                </motion.div>
-              )
-            })}
-          </motion.div>
+                      {/* Content */}
+                      <div className="mt-auto">
+                        <h3 className="flex items-center gap-1.5 text-[15px] font-semibold tracking-tight text-foreground">
+                          <span>{tool.name}</span>
+                          <ArrowRight className="h-4 w-4 -translate-x-1 text-accent opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-100" />
+                        </h3>
+                        <p className="mt-1.5 text-sm leading-relaxed text-muted">
+                          {tool.description}
+                        </p>
+                      </div>
+                    </Link>
+                  </motion.div>
+                )
+              })}
+            </motion.div>
+          )}
         </motion.div>
       </AnimatePresence>
     </div>

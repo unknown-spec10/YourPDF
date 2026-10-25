@@ -21,10 +21,10 @@ export default function RootLayout({
     >
       <body className="min-h-screen flex flex-col bg-background text-foreground transition-colors duration-200 relative">
         <Providers>
-          {/* Floating Ambient Mesh Orbs */}
-          <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none opacity-40 dark:opacity-30 select-none">
-            <div className="absolute top-[15%] left-[10%] w-[45vw] h-[45vw] rounded-full bg-indigo-500/15 dark:bg-indigo-500/5 blur-[120px] animate-orb-1" />
-            <div className="absolute bottom-[15%] right-[5%] w-[50vw] h-[50vw] rounded-full bg-purple-500/15 dark:bg-purple-500/5 blur-[135px] animate-orb-2" />
+          {/* Floating Ambient Mesh */}
+          <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden opacity-60 select-none dark:opacity-40">
+            <div className="absolute top-[-10%] left-[8%] h-[42rem] w-[42rem] rounded-full bg-accent/[0.07] blur-[140px] animate-orb-1" />
+            <div className="absolute right-[-8%] bottom-[-15%] h-[46rem] w-[46rem] rounded-full bg-accent/[0.05] blur-[150px] animate-orb-2" />
           </div>
           <Navbar />
           <main className="flex-1 flex flex-col w-full relative z-10">

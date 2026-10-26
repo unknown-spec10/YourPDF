@@ -131,6 +131,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: clip;
 }
 
 /* Type hierarchy — premium editorial rhythm */

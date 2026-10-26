@@ -8,6 +8,7 @@ back as a ``Response``. ``extract_text`` is the exception: with
 with JSON.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -17,6 +18,7 @@ import uuid
 import zipfile
 
 import img2pdf
+from fastapi import HTTPException
 from pdf2docx import Converter
 from pdf2image import convert_from_path
 from pypdf import PdfReader, PdfWriter
@@ -142,11 +144,203 @@ def compress_pdf_task(file_path: str, quality: str, original_filename: str = Non
                     logger.warning(f"Failed to remove {path}: {cleanup_err}")
 
 
-def merge_pdfs_task(file_paths: list[str], original_filename: str = None) -> tuple[bytes, str]:
-    """Combine PDFs in order and return the merged PDF bytes."""
+def _parse_merge_plan(plan, num_files: int) -> list | None:
+    """Parse the optional merge ``plan`` into a list of {file, pages} blocks.
+
+    ``plan`` is the raw JSON string from the ``plan`` form field (or an
+    already-decoded list, accepted for direct unit use). Returns ``None``
+    when the plan is missing/empty so callers keep the legacy append-all
+    behavior. Raises ``HTTPException`` 400 on any shape/index error.
+    """
+    if plan is None:
+        return None
+    if isinstance(plan, str):
+        if not plan.strip():
+            return None
+        try:
+            parsed = json.loads(plan)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid merge plan: must be a JSON array string, "
+                'e.g. \'[{"file": 0, "pages": "1-2"}]\'.',
+            )
+    else:
+        parsed = plan
+    if parsed is None:
+        return None
+    if isinstance(parsed, list) and len(parsed) == 0:
+        return None
+    if not isinstance(parsed, list):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid merge plan: must be a JSON array of {file, pages} blocks.",
+        )
+    for i, block in enumerate(parsed):
+        if not isinstance(block, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid merge plan block at index {i}: "
+                "each block must be an object with 'file' and 'pages'.",
+            )
+        if "file" not in block or "pages" not in block:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid merge plan block at index {i}: "
+                "each block must contain 'file' and 'pages'.",
+            )
+        f = block["file"]
+        if isinstance(f, bool) or not isinstance(f, int):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file index at plan block {i}: "
+                "'file' must be a zero-based integer index.",
+            )
+        if f < 0 or f >= num_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file index {f} at plan block {i}: "
+                f"only {num_files} files uploaded (valid range 0-{num_files - 1}).",
+            )
+        p = block["pages"]
+        if not isinstance(p, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid pages specification at plan block {i} for file index {f}: "
+                "must be a string like '1-3, 5' or 'all'.",
+            )
+        if not p.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid pages specification at plan block {i} for file index {f}: "
+                "pages string must not be empty.",
+            )
+    return parsed
+
+
+def _parse_merge_pages_spec(pages_spec: str, total_pages: int, file_index: int) -> list[int]:
+    """Parse a 1-based pages string into zero-based page indices.
+
+    Supports ``all``, comma-separated numbers, closed ranges (``1-3``) and
+    open-ended ranges (``3-`` means 3 to end). Raises ``HTTPException`` 400
+    for unparsable input or page numbers beyond ``total_pages``.
+    """
+    if not isinstance(pages_spec, str):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid pages specification for file index {file_index}: "
+            "must be a string like '1-3, 5' or 'all'.",
+        )
+    s = pages_spec.strip()
+    if not s:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid pages specification for file index {file_index}: "
+            "pages string must not be empty.",
+        )
+    if s.lower() == "all":
+        return list(range(total_pages))
+    pages: list[int] = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            if part.count("-") != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages_spec}' for file index "
+                    f"{file_index}: could not parse range '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            start_str, end_str = part.split("-", 1)
+            start_str = start_str.strip()
+            end_str = end_str.strip()
+            if not start_str and not end_str:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages_spec}' for file index "
+                    f"{file_index}: could not parse range '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            try:
+                start = 1 if not start_str else int(start_str)
+                end = total_pages if not end_str else int(end_str)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages_spec}' for file index "
+                    f"{file_index}: could not parse range '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            if start < 1 or end < 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages_spec}' for file index "
+                    f"{file_index}: page numbers must be >= 1.",
+                )
+            if start > end:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages_spec}' for file index "
+                    f"{file_index}: start page {start} exceeds end page {end} in range '{part}'.",
+                )
+            for p in range(start, end + 1):
+                if p < 1 or p > total_pages:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Page {p} out of range for file index {file_index}: "
+                        f"file has {total_pages} pages.",
+                    )
+                pages.append(p - 1)
+        else:
+            try:
+                p = int(part)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages_spec}' for file index "
+                    f"{file_index}: could not parse '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            if p < 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages_spec}' for file index "
+                    f"{file_index}: page numbers must be >= 1.",
+                )
+            if p > total_pages:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Page {p} out of range for file index {file_index}: "
+                    f"file has {total_pages} pages.",
+                )
+            pages.append(p - 1)
+    if not pages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid pages specification '{pages_spec}' for file index "
+            f"{file_index}: no pages selected. "
+            "Expected formats like '1-3', '5', '3-' or 'all'.",
+        )
+    return pages
+
+
+def merge_pdfs_task(
+    file_paths: list[str], original_filename: str = None, plan=None
+) -> tuple[bytes, str]:
+    """Combine PDFs in order and return the merged PDF bytes.
+
+    When ``plan`` is missing/empty, appends each file whole (legacy
+    behavior). Otherwise ``plan`` is a JSON string (or decoded list) of
+    ``{"file": <zero-based index>, "pages": "<range|all>"}`` blocks applied
+    in order; e.g. ``[{"file": 0, "pages": "1-2"}]``.
+    """
     logger.info(f"Starting PDF merge task for files: {file_paths}")
 
     resolved_paths = resolve_paths(file_paths)
+
+    parsed_plan = _parse_merge_plan(plan, len(resolved_paths))
 
     output_filename = f"merged_{uuid.uuid4()}.pdf"
     tmp_dir = ensure_tmp_dir()
@@ -154,12 +348,26 @@ def merge_pdfs_task(file_paths: list[str], original_filename: str = None) -> tup
 
     merger = PdfWriter()
     try:
-        for fp in resolved_paths:
-            if os.path.exists(fp):
-                merger.append(fp)
-            else:
-                logger.error(f"Merge file not found: {fp}")
-                raise FileNotFoundError(f"File to merge not found: {fp}")
+        if parsed_plan is None:
+            for fp in resolved_paths:
+                if os.path.exists(fp):
+                    merger.append(fp)
+                else:
+                    logger.error(f"Merge file not found: {fp}")
+                    raise FileNotFoundError(f"File to merge not found: {fp}")
+        else:
+            readers: list[PdfReader] = []
+            for fp in resolved_paths:
+                if not os.path.exists(fp):
+                    logger.error(f"Merge file not found: {fp}")
+                    raise FileNotFoundError(f"File to merge not found: {fp}")
+                readers.append(PdfReader(fp))
+            for block in parsed_plan:
+                file_index = block["file"]
+                pages_spec = block["pages"]
+                total_pages = len(readers[file_index].pages)
+                for page_num in _parse_merge_pages_spec(pages_spec, total_pages, file_index):
+                    merger.add_page(readers[file_index].pages[page_num])
 
         with open(output_path, "wb") as f:
             merger.write(f)

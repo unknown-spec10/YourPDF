@@ -98,7 +98,11 @@ export default function PdfPreviewModal({
             <div className="flex-1 bg-background p-2 sm:p-3">
               {pdfUrl ? (
                 <iframe
-                  src={`${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}preview=true#toolbar=1`}
+                  src={
+                    pdfUrl.startsWith('blob:')
+                      ? `${pdfUrl}#toolbar=1`
+                      : `${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}preview=true#toolbar=1`
+                  }
                   className="h-full w-full rounded-lg border border-border bg-surface-2"
                   title="PDF document preview"
                 />

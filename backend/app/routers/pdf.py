@@ -68,7 +68,8 @@ def compress_pdf(
 
 @router.post("/merge")
 def merge_pdfs(
-    files: list[UploadFile] = File(...)
+    files: list[UploadFile] = File(...),
+    plan: str | None = Form(None),
 ):
     if len(files) < 2:
         raise HTTPException(status_code=400, detail="At least 2 PDF files are required to merge.")
@@ -81,7 +82,9 @@ def merge_pdfs(
 
     saved_paths = save_multi_upload(files, ".pdf")
     try:
-        data, download_name = merge_pdfs_task(saved_paths, original_filename=files[0].filename)
+        data, download_name = merge_pdfs_task(
+            saved_paths, original_filename=files[0].filename, plan=plan
+        )
     except HTTPException:
         raise
     except Exception as e:

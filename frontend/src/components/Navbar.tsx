@@ -100,7 +100,7 @@ export default function Navbar() {
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
           <a
-            href="https://github.com"
+            href="https://github.com/unknown-spec10/YourPDF"
             target="_blank"
             rel="noopener noreferrer"
             className="hidden h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground sm:flex"
@@ -168,7 +168,7 @@ export default function Navbar() {
                 )
               })}
               <a
-                href="https://github.com"
+                href="https://github.com/unknown-spec10/YourPDF"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-lg px-3 py-2.5 text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground sm:hidden"

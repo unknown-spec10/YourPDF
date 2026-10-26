@@ -19,6 +19,16 @@ export default function Footer() {
               </span>
               All systems operational
             </p>
+            <p className="mt-3 text-xs text-muted">
+              Developed by <span className="font-medium text-foreground">Deep Podder</span>
+              {' · '}
+              <a
+                href="mailto:conect.deeppodder@gmail.com"
+                className="transition-colors hover:text-foreground"
+              >
+                conect.deeppodder@gmail.com
+              </a>
+            </p>
           </div>
 
           <nav className="grid grid-cols-2 gap-8 text-sm sm:gap-16" aria-label="Footer">
@@ -37,7 +47,7 @@ export default function Footer() {
                 Privacy
               </Link>
               <a
-                href="https://github.com"
+                href="https://github.com/unknown-spec10/YourPDF"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted transition-colors hover:text-foreground"

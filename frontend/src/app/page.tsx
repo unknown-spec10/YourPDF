@@ -179,16 +179,16 @@ export default function Home() {
             </div>
 
             {/* Diagram */}
-            <div className="mt-auto flex items-center justify-between gap-2 rounded-xl border border-border bg-surface p-3 text-center text-xs font-medium">
+            <div className="mt-auto flex flex-col items-stretch gap-2 rounded-xl border border-border bg-surface p-3 text-center text-xs font-medium sm:flex-row sm:items-center">
               <div className="w-full rounded-lg border border-border bg-surface-2 px-2 py-2.5">
                 <span>Your file</span>
               </div>
-              <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
+              <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
               <div className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-success-subtle px-2 py-2.5 text-success">
                 <Cpu className="h-4 w-4" />
                 <span>Browser</span>
               </div>
-              <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
+              <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
               <div className="w-full rounded-lg border border-border bg-surface-2 px-2 py-2.5">
                 <span>Download</span>
               </div>
@@ -209,20 +209,20 @@ export default function Home() {
             </div>
 
             {/* Diagram */}
-            <div className="mt-auto flex items-center justify-between gap-1.5 rounded-xl border border-border bg-surface p-3 text-center text-xs font-medium sm:gap-2">
+            <div className="mt-auto flex flex-col items-stretch gap-2 rounded-xl border border-border bg-surface p-3 text-center text-xs font-medium sm:flex-row sm:items-center">
               <div className="w-full rounded-lg border border-border bg-surface-2 px-1 py-2.5 sm:px-2">
                 <span>File</span>
               </div>
-              <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
+              <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
               <div className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-subtle px-1 py-2.5 text-accent sm:px-2">
                 <Server className="h-4 w-4" />
                 <span>Worker</span>
               </div>
-              <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
+              <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
               <div className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-danger-subtle px-1 py-2.5 text-danger sm:px-2">
                 <span>Auto-delete</span>
               </div>
-              <ArrowRight className="h-4 w-4 shrink-0 text-muted" />
+              <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
               <div className="w-full rounded-lg border border-border bg-surface-2 px-1 py-2.5 sm:px-2">
                 <span>Result</span>
               </div>

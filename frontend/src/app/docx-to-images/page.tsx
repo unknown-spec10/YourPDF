@@ -1,11 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Image as ImageIcon, Settings, Download, RefreshCw, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, FileText, Download, RefreshCw, AlertTriangle, X, Repeat } from 'lucide-react'
 import DropZone from '@/components/DropZone'
-import FilePreview from '@/components/FilePreview'
 import ProgressBar from '@/components/ProgressBar'
 import { useFileJob } from '@/hooks/useFileJob'
 import { submitJob, buildSingleFileFormData } from '@/lib/api'
@@ -14,6 +13,83 @@ type DocxToImagesArgs = { file: File; format: string; dpi: number }
 
 const docxToImagesSubmitter = ({ file, format, dpi }: DocxToImagesArgs) =>
   submitJob('/api/office/docx-to-images', buildSingleFileFormData(file, { format, dpi }))
+
+function DocxHtmlPreview({ file, caption }: { file: File; caption: string }) {
+  const [html, setHtml] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [hasError, setHasError] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setIsLoading(true)
+    setHasError(false)
+    setHtml(null)
+    file
+      .arrayBuffer()
+      .then(async (buffer) => {
+        try {
+          const mammothModule = await import('mammoth')
+          const result = await mammothModule.default.convertToHtml({ arrayBuffer: buffer })
+          if (!cancelled) {
+            setHtml(result.value)
+            setIsLoading(false)
+          }
+        } catch {
+          if (!cancelled) {
+            setHasError(true)
+            setIsLoading(false)
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHasError(true)
+          setIsLoading(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [file])
+
+  if (isLoading) {
+    return (
+      <div className="mt-3 rounded-lg border border-border bg-background p-4" aria-live="polite">
+        <div className="flex items-center gap-2 text-xs text-muted">
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-border border-t-accent" />
+          <span>Rendering document preview…</span>
+        </div>
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="h-3 w-11/12 animate-pulse rounded bg-surface-2" />
+          <div className="h-3 w-full animate-pulse rounded bg-surface-2" />
+          <div className="h-3 w-3/4 animate-pulse rounded bg-surface-2" />
+        </div>
+      </div>
+    )
+  }
+
+  if (hasError || !html) {
+    return (
+      <p className="mt-3 text-xs text-muted leading-relaxed">
+        Live preview unavailable for this file. Verify the name and size above to continue.
+      </p>
+    )
+  }
+
+  return (
+    <div className="mt-3 min-w-0">
+      <div className="max-h-[480px] overflow-y-auto rounded-lg border border-border bg-background p-4">
+        <div
+          className="min-w-0 text-sm leading-relaxed text-foreground [&_h1]:mb-2 [&_h1]:text-base [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:mb-2 [&_p]:break-words [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mb-1 [&_table]:mb-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-[13px] [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-surface-2 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold [&_img]:max-w-full [&_img]:rounded-md"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </div>
+      <p className="mt-2 text-[11px] text-muted leading-relaxed">
+        {caption}
+      </p>
+    </div>
+  )
+}
 
 export default function DocxToImagesPage() {
   const [file, setFile] = useState<File | null>(null)
@@ -45,214 +121,271 @@ export default function DocxToImagesPage() {
     reset()
   }
 
+  const isWorkspace = file && !isDone && !isError && !isSubmitting
+
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-12 flex-1 flex flex-col justify-center">
+    <div className={`mx-auto w-full min-w-0 flex-1 flex flex-col justify-center overflow-x-clip px-4 sm:px-6 py-6 sm:py-10 transition-all duration-300 ${file ? 'max-w-[1400px]' : 'max-w-2xl'}`}>
       {/* Header */}
-      <div className="mb-8">
-        <Link href="/tools" className="inline-flex items-center gap-2 text-sm text-muted hover:text-foreground mb-4 transition-colors">
+      <div className="mb-5 sm:mb-7 min-w-0">
+        <Link href="/tools" className="inline-flex items-center gap-2 text-sm text-muted hover:text-foreground mb-3 transition-colors">
           <ArrowLeft className="h-4 w-4" />
           <span>Back to all tools</span>
         </Link>
-        <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10 text-accent">
-            <ImageIcon className="h-6 w-6" />
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
+            <FileText className="h-5 w-5" />
           </div>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Word to Images</h1>
-            <p className="text-muted mt-1">Convert your Word document (.docx) pages into clean PNG or JPG files.</p>
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Word to Images</h1>
+            <p className="text-sm text-muted mt-0.5">Convert your Word document (.docx) pages into clean PNG or JPG files.</p>
           </div>
         </div>
       </div>
 
-      {/* Main Form Box */}
-      <div className="rounded-2xl border border-card-border bg-surface p-6 md:p-8 relative overflow-hidden">
-        <AnimatePresence mode="wait">
-          {!file && !isDone && !isError && !isSubmitting && (
-            <motion.div
-              key="dropzone"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <DropZone
-                onFileAccepted={setFile}
-                accept={{ 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] }}
-                placeholderText="Drop your Word document (.docx) here"
-              />
-            </motion.div>
-          )}
+      <AnimatePresence mode="wait">
+        {!file && !isDone && !isError && !isSubmitting && (
+          <motion.div
+            key="dropzone"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="flex flex-col gap-3 min-w-0"
+          >
+            <DropZone
+              onFileAccepted={setFile}
+              accept={{ 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] }}
+              placeholderText="Drop your Word document (.docx) here"
+            />
+            <p className="text-center text-xs text-muted">
+              Each page renders to an image and downloads as a ZIP archive.
+            </p>
+          </motion.div>
+        )}
 
-          {file && !isDone && !isError && !isSubmitting && (
-            <motion.div
-              key="file-selected"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex flex-col gap-6"
-            >
-              <FilePreview fileName={file.name} fileSize={file.size} onRemove={handleReset} />
+        {isWorkspace && file && (
+          <motion.div
+            key="file-selected"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="flex flex-col gap-4 sm:gap-5 min-w-0"
+          >
+            {/* Slim add bar */}
+            <div className="flex items-center gap-3 min-w-0 rounded-xl border border-card-border bg-surface px-3 py-2.5 shadow-sm">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                <FileText className="h-4 w-4" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="truncate text-sm font-medium tracking-tight">{file.name}</p>
+                <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted">
+                  {(file.size / 1024 / 1024).toFixed(2)} MB · {format.toUpperCase()} · {dpi} DPI
+                </p>
+              </div>
+              <label className="inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold text-muted hover:text-foreground hover:bg-surface-2 transition-colors">
+                <Repeat className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Replace</span>
+                <input
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => {
+                    const next = e.target.files?.[0]
+                    if (next) setFile(next)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={handleReset}
+                aria-label="Remove file"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger-subtle hover:text-danger transition-colors cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
 
-              {/* Advanced Settings */}
-              <div className="border-t border-border pt-4">
+            {/* Workspace: compact settings + identity card */}
+            <div className="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] gap-4 sm:gap-5 items-start min-w-0">
+              {/* Settings */}
+              <div className="flex flex-col gap-4 min-w-0 order-1">
                 <button
                   type="button"
                   onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="inline-flex items-center gap-2 text-sm font-semibold text-muted hover:text-foreground transition-colors cursor-pointer"
+                  aria-expanded={showAdvanced}
+                  className="inline-flex items-center justify-between gap-2 text-[13px] font-semibold text-muted hover:text-foreground transition-colors cursor-pointer"
                 >
-                  <Settings className="h-4 w-4" />
-                  <span>Image conversion settings</span>
+                  <span>Image settings</span>
+                  <span className="text-xs font-normal">{showAdvanced ? 'Hide' : 'Show'}</span>
                 </button>
 
                 {showAdvanced && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    className="mt-4 p-4 rounded-xl bg-background border border-border flex flex-col gap-4"
-                  >
-                    {/* Format selector */}
-                    <div className="flex flex-col gap-2">
-                      <label className="text-sm font-bold">Output Format</label>
-                      <div className="grid grid-cols-3 gap-3">
-                        {(['png', 'jpg', 'jpeg'] as const).map((fmt) => (
-                          <button
-                            key={fmt}
-                            type="button"
-                            onClick={() => setFormat(fmt)}
-                            className={`py-2 px-4 rounded-lg text-sm font-semibold border transition-all cursor-pointer ${
-                              format === fmt
-                                ? 'bg-accent/10 border-accent text-accent'
-                                : 'border-border bg-surface hover:bg-background'
-                            }`}
-                          >
-                            {fmt.toUpperCase()}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                <div className="flex flex-col gap-4 min-w-0">
+                <div className="flex flex-col gap-2">
+                  <span className="text-[13px] font-semibold">Output format</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['png', 'jpg', 'jpeg'] as const).map((fmt) => (
+                      <button
+                        key={fmt}
+                        type="button"
+                        onClick={() => setFormat(fmt)}
+                        aria-pressed={format === fmt}
+                        className={`h-10 rounded-lg text-[13px] font-semibold border transition-colors cursor-pointer ${
+                          format === fmt
+                            ? 'border-accent bg-accent/10 text-foreground'
+                            : 'border-border hover:border-accent/50'
+                        }`}
+                      >
+                        {fmt.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                    {/* DPI settings */}
-                    <div className="flex flex-col gap-2">
-                      <label className="text-sm font-bold flex justify-between">
-                        <span>Resolution (DPI)</span>
-                        <span className="text-accent font-semibold">{dpi} DPI</span>
-                      </label>
-                      <div className="grid grid-cols-4 gap-3">
-                        {([100, 150, 200, 300] as const).map((resolution) => (
-                          <button
-                            key={resolution}
-                            type="button"
-                            onClick={() => setDpi(resolution)}
-                            className={`py-2 px-3 rounded-lg text-sm font-semibold border transition-all cursor-pointer ${
-                              dpi === resolution
-                                ? 'bg-accent/10 border-accent text-accent'
-                                : 'border-border bg-surface hover:bg-background'
-                            }`}
-                          >
-                            {resolution}
-                          </button>
-                        ))}
-                      </div>
-                      <span className="text-xs text-muted leading-relaxed mt-1">
-                        {dpi <= 100 && 'Low: Smallest ZIP size, lower image quality.'}
-                        {dpi === 150 && 'Medium: Balanced size and quality. Recommended for documents.'}
-                        {dpi === 200 && 'High: Detailed image rendering. Larger file size.'}
-                        {dpi === 300 && 'Super High: High resolution print standard. Large file size.'}
-                      </span>
-                    </div>
-                  </motion.div>
+                <div className="flex flex-col gap-2">
+                  <span className="flex items-baseline justify-between gap-2 text-[13px] font-semibold">
+                    <span>Resolution</span>
+                    <span className="font-mono text-xs tabular-nums text-accent">{dpi} DPI</span>
+                  </span>
+                  <div className="grid grid-cols-4 gap-2">
+                    {([100, 150, 200, 300] as const).map((resolution) => (
+                      <button
+                        key={resolution}
+                        type="button"
+                        onClick={() => setDpi(resolution)}
+                        aria-pressed={dpi === resolution}
+                        className={`h-10 rounded-lg text-[13px] font-semibold border transition-colors cursor-pointer ${
+                          dpi === resolution
+                            ? 'border-accent bg-accent/10 text-foreground'
+                            : 'border-border hover:border-accent/50'
+                        }`}
+                      >
+                        {resolution}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted leading-relaxed">
+                    {dpi <= 100 && 'Low: smallest ZIP size, lower image quality.'}
+                    {dpi === 150 && 'Medium: balanced size and quality. Recommended for documents.'}
+                    {dpi === 200 && 'High: detailed image rendering. Larger file size.'}
+                    {dpi === 300 && 'Super high: high resolution print standard. Large file size.'}
+                  </p>
+                </div>
+
+                </div>
                 )}
-              </div>
 
-              {/* Submit Button */}
-              <button
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                className="w-full h-12 flex items-center justify-center rounded-xl bg-accent text-accent-foreground font-semibold hover:bg-accent-hover hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all duration-200"
-              >
-                {isSubmitting ? 'Converting...' : 'Convert to Images'}
-              </button>
-            </motion.div>
-          )}
-
-          {(isSubmitting || isDone || isError) && (
-            <motion.div
-              key="processing-state"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center py-6 text-center"
-            >
-              {/* Queued / Processing States */}
-              {isSubmitting && (
-                <div className="w-full max-w-md">
-                  <ProgressBar
-                    progress={50}
-                    message="Rasterizing Word pages..."
-                  />
-                </div>
-              )}
-
-              {/* Success State */}
-              {isDone && downloadUrl && (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
-                    <Download className="h-7 w-7" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-bold">Conversion Completed!</h3>
-                    <p className="text-sm text-muted mt-1">
-                      {(fileName ?? '').toLowerCase().endsWith('.zip')
-                        ? 'Your ZIP archive containing page images is ready.'
-                        : 'Your image file is ready for download.'}
-                    </p>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
-                    <a
-                      href={downloadUrl ?? ''}
-                      className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
-                    >
-                      <Download className="h-4 w-4" />
-                      <span>
-                        {(fileName ?? '').toLowerCase().endsWith('.zip')
-                          ? 'Download ZIP'
-                          : `Download ${format.toUpperCase()}`}
-                      </span>
-                    </a>
-                    <button
-                      onClick={handleReset}
-                      className="inline-flex h-11 items-center gap-2 rounded-xl border border-border px-6 font-semibold hover:bg-background transition-colors cursor-pointer"
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                      <span>Convert Another</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Error State */}
-              {isError && (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
-                    <AlertTriangle className="h-7 w-7" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-bold">Conversion Failed</h3>
-                    <p className="text-sm text-muted mt-1">
-                      {submitError || 'An unexpected error occurred during processing.'}
-                    </p>
-                  </div>
+                <div className="sticky bottom-3 z-10 lg:static lg:z-auto">
                   <button
-                    onClick={handleReset}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl border border-border px-6 font-semibold hover:bg-background transition-colors mt-4 cursor-pointer"
+                    onClick={handleSubmit}
+                    disabled={isSubmitting}
+                    className="w-full h-11 flex items-center justify-center rounded-xl bg-accent text-accent-foreground text-sm font-semibold hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
                   >
-                    <RefreshCw className="h-4 w-4" />
-                    <span>Try Again</span>
+                    Convert to Images
                   </button>
                 </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+              </div>
+
+              {/* Preview — the one card */}
+              <div className="min-w-0 order-2 rounded-xl border border-card-border bg-surface shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between gap-3 min-w-0 px-3.5 sm:px-4 py-3 border-b border-border">
+                  <span className="text-[13px] font-semibold truncate">Selected document</span>
+                  <span className="shrink-0 font-mono text-xs tabular-nums text-muted">{format.toUpperCase()} · {dpi} DPI</span>
+                </div>
+                <div className="p-3 sm:p-4">
+                  <div className="flex items-center gap-3 min-w-0 rounded-lg border border-border bg-background p-4">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                      <FileText className="h-5 w-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="truncate text-sm font-semibold tracking-tight">{file.name}</p>
+                      <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB · Word document
+                      </p>
+                    </div>
+                  </div>
+                  <DocxHtmlPreview file={file} caption={`Live preview rendered from the document text. Output is a ZIP of ${format.toUpperCase()} images at ${dpi} DPI.`} />
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {(isSubmitting || isDone || isError) && (
+          <motion.div
+            key="processing-state"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col items-center py-6 text-center min-w-0"
+          >
+            {isSubmitting && (
+              <div className="w-full max-w-md min-w-0">
+                <ProgressBar
+                  progress={50}
+                  message="Rasterizing Word pages..."
+                />
+              </div>
+            )}
+
+            {isDone && downloadUrl && (
+              <div className="flex flex-col items-center gap-4 min-w-0">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-1">
+                  <Download className="h-7 w-7" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-2xl font-bold">Conversion Completed!</h3>
+                  <p className="text-sm text-muted mt-1">
+                    {(fileName ?? '').toLowerCase().endsWith('.zip')
+                      ? 'Your ZIP archive containing page images is ready.'
+                      : 'Your image file is ready for download.'}
+                  </p>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mt-2 w-full max-w-full justify-center items-stretch sm:items-center">
+                  <a
+                    href={downloadUrl ?? ''}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-accent px-6 text-sm font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>
+                      {(fileName ?? '').toLowerCase().endsWith('.zip')
+                        ? 'Download ZIP'
+                        : `Download ${format.toUpperCase()}`}
+                    </span>
+                  </a>
+                  <button
+                    onClick={handleReset}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border px-6 text-sm font-semibold hover:bg-surface-2 transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    <span>Convert Another</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {isError && (
+              <div className="flex flex-col items-center gap-4 min-w-0">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-1">
+                  <AlertTriangle className="h-7 w-7" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-2xl font-bold">Conversion Failed</h3>
+                  <p className="text-sm text-muted mt-1 max-w-md">
+                    {submitError || 'An unexpected error occurred during processing.'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleReset}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-border px-6 text-sm font-semibold hover:bg-surface-2 transition-colors mt-2 cursor-pointer"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  <span>Try Again</span>
+                </button>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

@@ -272,13 +272,15 @@ async def unlock_pdf(
 @router.post("/rotate")
 def rotate_pdf(
     file: UploadFile = File(...),
-    rotation: int = Form(...)
+    rotation: float = Form(...)
 ):
     validate_file_size(file, 30)
     validate_extension(file.filename, (".pdf",), "Only PDF files are supported.")
 
-    if rotation not in [90, 180, 270]:
-        raise HTTPException(status_code=400, detail="Invalid rotation angle. Must be 90, 180, or 270.")
+    if rotation == 0:
+        raise HTTPException(status_code=400, detail="Rotation angle must be non-zero.")
+    if abs(rotation) > 360:
+        raise HTTPException(status_code=400, detail="Invalid rotation angle. Must be between -360 and 360 degrees, excluding 0.")
 
     relative_path = save_upload_file(file, ".pdf")
     try:

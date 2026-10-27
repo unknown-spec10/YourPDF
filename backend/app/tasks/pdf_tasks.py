@@ -10,6 +10,7 @@ with JSON.
 
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -21,7 +22,8 @@ import img2pdf
 from fastapi import HTTPException
 from pdf2docx import Converter
 from pdf2image import convert_from_path
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter, Transformation
+from pypdf.generic import RectangleObject
 
 from app.tasks.common import (
     SUBPROCESS_TIMEOUT,
@@ -722,7 +724,17 @@ def extract_text_task(
         reader = PdfReader(file_path)
         extracted_content = ""
         for i, page in enumerate(reader.pages):
-            text = page.extract_text()
+            try:
+                text = page.extract_text(extraction_mode="layout")
+            except TypeError:
+                try:
+                    text = page.extract_text(layout_mode=True)
+                except Exception:
+                    logger.warning(f"Layout extraction failed for page {i + 1}; falling back to plain mode.")
+                    text = page.extract_text()
+            except Exception:
+                logger.warning(f"Layout extraction failed for page {i + 1}; falling back to plain mode.")
+                text = page.extract_text()
             if text:
                 extracted_content += f"--- Page {i + 1} ---\n{text}\n\n"
 
@@ -917,8 +929,12 @@ def create_page_number_pdf(output_path, width, height, current_page, total_pages
     c.save()
 
 
-def rotate_pdf_task(file_path: str, rotation: int, original_filename: str = None) -> tuple[bytes, str]:
-    """Rotate all PDF pages and return the bytes."""
+def rotate_pdf_task(file_path: str, rotation: float, original_filename: str = None) -> tuple[bytes, str]:
+    """Rotate all PDF pages and return the bytes.
+
+    Multiples of 90 use the fast ``/Rotate`` path. Any other angle rotates
+    page content via a transform onto a resized blank page.
+    """
     logger.info(f"Starting PDF rotation task for {file_path}. Rotation angle: {rotation}")
 
     file_path = resolve_path(file_path)
@@ -934,9 +950,36 @@ def rotate_pdf_task(file_path: str, rotation: int, original_filename: str = None
         reader = PdfReader(file_path)
         writer = PdfWriter()
 
+        rot = float(rotation)
         for page in reader.pages:
-            page.rotate(rotation)
-            writer.add_page(page)
+            existing = float(page.rotation or 0)
+            theta = rot + existing
+            if theta % 90 == 0:
+                page.rotate(int(rot) if rot.is_integer() else rot)
+                writer.add_page(page)
+                continue
+
+            box = page.cropbox if "/CropBox" in page else page.mediabox
+            x0, y0, x1, y1 = float(box.left), float(box.bottom), float(box.right), float(box.top)
+            w = x1 - x0
+            h = y1 - y0
+
+            rad = math.radians(theta)
+            cos_a = math.cos(rad)
+            sin_a = math.sin(rad)
+            corners = ((0, 0), (w, 0), (w, h), (0, h))
+            xs = [x * cos_a + y * sin_a for x, y in corners]
+            ys = [-x * sin_a + y * cos_a for x, y in corners]
+            W = round(max(xs) - min(xs), 3)
+            H = round(max(ys) - min(ys), 3)
+            tx = round(-min(xs), 3)
+            ty = round(-min(ys), 3)
+
+            new_page = writer.add_blank_page(width=W, height=H)
+            transform = Transformation().translate(-x0, -y0).rotate(-theta).translate(tx, ty)
+            new_page.merge_transformed_page(page, transform)
+            new_page.mediabox = RectangleObject((0, 0, W, H))
+            new_page.cropbox = RectangleObject((0, 0, W, H))
 
         with open(output_path, "wb") as f:
             writer.write(f)

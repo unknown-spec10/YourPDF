@@ -209,7 +209,7 @@ def test_rotate_pdf_roundtrip(client):
 
 
 def test_rotate_pdf_invalid_angle(client):
-    response = client.post("/api/rotate", files=_pdf_file(), data={"rotation": "45"})
+    response = client.post("/api/rotate", files=_pdf_file(), data={"rotation": "0"})
     assert response.status_code == 400
 
 

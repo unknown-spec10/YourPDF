@@ -17,7 +17,7 @@ const rotateSubmitter = ({ file, rotation }: RotateArgs) =>
 
 export default function RotatePage() {
   const [file, setFile] = useState<File | null>(null)
-  const [rotation, setRotation] = useState<90 | 180 | 270>(90)
+  const [rotation, setRotation] = useState<number | ''>(90)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [fileUrl, setFileUrl] = useState<string | null>(null)
   const [isZoomOpen, setIsZoomOpen] = useState(false)
@@ -46,7 +46,7 @@ export default function RotatePage() {
   } = useFileJob<RotateArgs>(rotateSubmitter)
 
   const handleSubmit = async () => {
-    if (!file) return
+    if (!file || rotation === '' || rotation === 0) return
     const ok = await submit({ file, rotation })
     if (!ok) {
       alert('Failed to initialize rotation task. Please check server connection.')
@@ -114,7 +114,7 @@ export default function RotatePage() {
               <div className="flex-1 min-w-0">
                 <p className="truncate text-sm font-medium tracking-tight">{file.name}</p>
                 <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB · {rotation}° rotation
+                  {(file.size / 1024 / 1024).toFixed(2)} MB · {rotation === '' ? 0 : rotation}° rotation
                 </p>
               </div>
               <label className="inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold text-muted hover:text-foreground hover:bg-surface-2 transition-colors">
@@ -145,38 +145,69 @@ export default function RotatePage() {
             <div className="grid grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] gap-4 sm:gap-5 items-start min-w-0">
               {/* Settings */}
               <div className="flex flex-col gap-4 min-w-0 order-1">
-                <div className="flex flex-col gap-2">
-                  <span className="text-[13px] font-semibold">01 — Rotation Angle</span>
-                  <div className="grid grid-cols-3 lg:grid-cols-1 gap-2">
-                    {([90, 180, 270] as const).map((angle) => (
-                      <button
-                        key={angle}
-                        type="button"
-                        onClick={() => setRotation(angle)}
-                        className={`px-3 py-2.5 rounded-lg border text-left transition-colors cursor-pointer ${
-                          rotation === angle
-                            ? 'border-accent bg-accent/10 text-foreground'
-                            : 'border-border hover:border-accent/50'
-                        }`}
-                      >
-                        <span className="block text-[13px] font-semibold">
-                          {angle === 90 && '90° CW'}
-                          {angle === 180 && '180° Flip'}
-                          {angle === 270 && '90° CCW'}
-                        </span>
-                      </button>
-                    ))}
+                <div className="flex flex-col gap-2 min-w-0">
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <span className="text-[13px] font-semibold">01 — Rotation Angle</span>
+                    <span className="shrink-0 font-mono text-xs tabular-nums text-muted">
+                      {rotation === '' ? '—' : `${rotation}°`}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-3 min-w-0 rounded-xl border border-border bg-background px-3 py-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={360}
+                      step={1}
+                      value={rotation === '' ? 0 : rotation}
+                      onChange={(e) => setRotation(Number(e.target.value))}
+                      aria-label="Rotation angle slider (clockwise degrees)"
+                      className="w-full min-w-0 accent-[var(--accent)] cursor-pointer"
+                    />
+                    <div className="flex items-center gap-2 min-w-0">
+                      <input
+                        type="number"
+                        min={0}
+                        max={360}
+                        step={0.5}
+                        value={rotation}
+                        placeholder="90"
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === '') {
+                            setRotation('')
+                            return
+                          }
+                          const n = parseFloat(v)
+                          if (Number.isNaN(n)) {
+                            setRotation('')
+                            return
+                          }
+                          setRotation(Math.min(360, Math.max(0, n)))
+                        }}
+                        aria-label="Rotation angle in degrees (clockwise)"
+                        className="h-10 w-full min-w-0 rounded-lg border border-border bg-surface px-3 text-sm font-mono tabular-nums text-foreground focus:outline-none focus:border-accent"
+                      />
+                      <span className="shrink-0 text-sm text-muted">° clockwise</span>
+                    </div>
+                    <p className="text-[11px] leading-snug text-muted">
+                      Any angle 0–360°. Positive values rotate clockwise. Use decimals (e.g. 37.5°) to straighten scans.
+                    </p>
                   </div>
                 </div>
 
                 <div className="sticky bottom-3 lg:static">
                   <button
                     onClick={handleSubmit}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || rotation === '' || rotation === 0}
                     className="w-full h-11 flex items-center justify-center rounded-xl bg-accent text-accent-foreground text-sm font-semibold hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
                   >
                     {isSubmitting ? 'Rotating...' : 'Rotate PDF'}
                   </button>
+                  {(rotation === '' || rotation === 0) && (
+                    <p className="mt-1.5 text-center text-[11px] text-muted">
+                      Enter a non-zero angle to enable rotation.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -184,7 +215,7 @@ export default function RotatePage() {
               <div className="min-w-0 order-2 rounded-xl border border-card-border bg-surface shadow-sm overflow-hidden">
                 <div className="flex items-center justify-between gap-3 min-w-0 px-3.5 sm:px-4 py-3 border-b border-border">
                   <span className="text-[13px] font-semibold truncate">02 — Rotation preview</span>
-                  <span className="shrink-0 font-mono text-xs tabular-nums text-muted">{rotation}°</span>
+                  <span className="shrink-0 font-mono text-xs tabular-nums text-muted">{rotation === '' ? 0 : rotation}°</span>
                 </div>
                 <div className="p-3 sm:p-4">
                   <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden flex flex-col items-center">
@@ -196,7 +227,7 @@ export default function RotatePage() {
                         <>
                           <div
                             className="absolute inset-4 transition-transform duration-500 ease-out"
-                            style={{ transform: `rotate(${rotation}deg)` }}
+                            style={{ transform: `rotate(${rotation === '' ? 0 : rotation}deg)` }}
                           >
                             <iframe
                               loading="lazy"
@@ -330,7 +361,7 @@ export default function RotatePage() {
             <div className="relative flex-1 min-h-0 w-full rounded-xl border border-card-border overflow-hidden bg-background">
               <div
                 className="w-full h-full transition-transform duration-500 ease-out"
-                style={{ transform: `rotate(${rotation}deg)` }}
+                style={{ transform: `rotate(${rotation === '' ? 0 : rotation}deg)` }}
               >
                 <iframe
                   src={`${fileUrl}#page=1&toolbar=0&navpanes=0`}

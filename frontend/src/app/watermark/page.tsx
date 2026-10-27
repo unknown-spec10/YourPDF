@@ -7,13 +7,13 @@ import { ArrowLeft, Type, Settings, Download, RefreshCw, AlertTriangle, Eye, Zoo
 import DropZone from '@/components/DropZone'
 import ProgressBar from '@/components/ProgressBar'
 import { useFileJob } from '@/hooks/useFileJob'
-import { submitJob, buildSingleFileFormData } from '@/lib/api'
+import { apiClient, submitJob, buildSingleFileFormData } from '@/lib/api'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
 
-type WatermarkArgs = { file: File; text: string; color: string; opacity: number; rotation: number }
+type WatermarkArgs = { file: File; text: string; color: string; opacity: number; rotation: number; font_size: number; pages: string }
 
-const watermarkSubmitter = ({ file, text, color, opacity, rotation }: WatermarkArgs) =>
-  submitJob('/api/watermark', buildSingleFileFormData(file, { text, color, opacity, rotation }))
+const watermarkSubmitter = ({ file, text, color, opacity, rotation, font_size, pages }: WatermarkArgs) =>
+  submitJob('/api/watermark', buildSingleFileFormData(file, { text, color, opacity, rotation, font_size, pages }))
 
 export default function WatermarkPage() {
   const [file, setFile] = useState<File | null>(null)
@@ -21,23 +21,83 @@ export default function WatermarkPage() {
   const [color, setColor] = useState('gray')
   const [opacity, setOpacity] = useState(0.3)
   const [rotation, setRotation] = useState(45)
+  const [fontSize, setFontSize] = useState(48)
+  const [pages, setPages] = useState('all')
+  const [numPages, setNumPages] = useState<number | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [fileUrl, setFileUrl] = useState<string | null>(null)
   const [isZoomOpen, setIsZoomOpen] = useState(false)
 
-  // Manage local file URL for preview
+  // Manage local file URL for preview and fetch page count
   useEffect(() => {
     if (file) {
       const url = URL.createObjectURL(file)
       setFileUrl(url)
+
+      const formData = new FormData()
+      formData.append('file', file)
+      apiClient.post('/api/pdf-info', formData)
+        .then((res) => {
+          setNumPages(res.data.num_pages)
+        })
+        .catch((err) => {
+          console.error('Failed to get PDF info:', err)
+        })
+
       return () => {
         URL.revokeObjectURL(url)
       }
     } else {
       setFileUrl(null)
+      setNumPages(null)
     }
   }, [file])
+
+  // Parse pages to a Set of 1-based page numbers that will be stamped.
+  // 'all' (case insensitive) selects every page; otherwise split-style
+  // ranges like 1-3, 5 with open-ended 3- supported.
+  const getSelectedPages = (): Set<number> => {
+    const selected = new Set<number>()
+    if (!numPages) return selected
+    const trimmedAll = pages.trim()
+    if (!trimmedAll) return selected
+    if (trimmedAll.toLowerCase() === 'all') {
+      for (let i = 1; i <= numPages; i++) selected.add(i)
+      return selected
+    }
+    const parts = trimmedAll.split(',')
+    for (const part of parts) {
+      const trimmed = part.trim()
+      if (!trimmed) continue
+      if (trimmed.includes('-')) {
+        const dashIdx = trimmed.indexOf('-')
+        const startRaw = trimmed.slice(0, dashIdx).trim()
+        const endRaw = trimmed.slice(dashIdx + 1).trim()
+        const start = startRaw === '' ? 1 : parseInt(startRaw, 10)
+        const end = endRaw === '' ? numPages : parseInt(endRaw, 10)
+        if (isNaN(start) || isNaN(end)) continue
+        const actualStart = Math.min(start, end)
+        const actualEnd = Math.max(start, end)
+        for (let i = actualStart; i <= actualEnd; i++) {
+          if (i >= 1 && i <= numPages) {
+            selected.add(i)
+          }
+        }
+      } else {
+        const page = parseInt(trimmed, 10)
+        if (!isNaN(page) && page >= 1 && page <= numPages) {
+          selected.add(page)
+        }
+      }
+    }
+    return selected
+  }
+
+  const selectedPages = getSelectedPages()
+  const pagesTrimmed = pages.trim()
+  const isPagesAll = pagesTrimmed.toLowerCase() === 'all'
+  const pagesValid = isPagesAll || (pagesTrimmed !== '' && selectedPages.size > 0)
 
   const {
     isSubmitting,
@@ -51,7 +111,15 @@ export default function WatermarkPage() {
 
   const handleSubmit = async () => {
     if (!file || !text) return
-    const ok = await submit({ file, text, color, opacity, rotation })
+    if (!pages.trim()) {
+      alert('Please enter pages to stamp (e.g. all or 1-3, 5).')
+      return
+    }
+    if (numPages !== null && !pagesValid) {
+      alert('Pages range is invalid or out of range for this file.')
+      return
+    }
+    const ok = await submit({ file, text, color, opacity, rotation, font_size: fontSize, pages: pages.trim() || 'all' })
     if (!ok) {
       alert('Failed to initialize watermark task. Please check server connection.')
     }
@@ -63,6 +131,9 @@ export default function WatermarkPage() {
     setColor('gray')
     setOpacity(0.3)
     setRotation(45)
+    setFontSize(48)
+    setPages('all')
+    setNumPages(null)
     setIsZoomOpen(false)
     setIsPreviewOpen(false)
     reset()
@@ -121,7 +192,7 @@ export default function WatermarkPage() {
               <div className="flex-1 min-w-0">
                 <p className="truncate text-sm font-medium tracking-tight">{file.name}</p>
                 <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB{text ? ` · “${text.slice(0, 24)}”` : ' · no watermark text'}
+                  {(file.size / 1024 / 1024).toFixed(2)} MB{text ? ` · “${text.slice(0, 24)}”` : ' · no watermark text'}{numPages !== null ? ` · ${numPages} pages` : ' · reading…'} · {isPagesAll ? 'stamping all' : `${selectedPages.size} selected`}
                 </p>
               </div>
               <label className="inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold text-muted hover:text-foreground hover:bg-surface-2 transition-colors">
@@ -161,6 +232,29 @@ export default function WatermarkPage() {
                     placeholder="e.g. CONFIDENTIAL / DO NOT COPY"
                     className="w-full h-11 px-3.5 rounded-lg border border-border bg-surface text-foreground placeholder-muted focus:outline-none focus:border-accent transition-colors text-sm"
                   />
+                </div>
+
+                <div className="flex flex-col gap-1.5 min-w-0">
+                  <label htmlFor="watermark-pages" className="flex items-baseline justify-between gap-2 text-[13px] font-semibold">
+                    <span>Pages to stamp</span>
+                    <span className="text-xs text-muted font-normal">{numPages !== null ? `${numPages} pages` : 'e.g. all or 1-3, 5'}</span>
+                  </label>
+                  <input
+                    id="watermark-pages"
+                    type="text"
+                    value={pages}
+                    onChange={(e) => setPages(e.target.value)}
+                    placeholder="e.g. all or 1-3, 5"
+                    className="w-full h-11 px-3.5 rounded-lg border border-border bg-surface text-foreground placeholder-muted focus:outline-none focus:border-accent transition-colors text-sm font-mono"
+                  />
+                  <p className="text-xs text-muted leading-relaxed">
+                    <span className="font-mono text-accent">all</span> stamps every page. Use <span className="font-mono text-accent">1-3, 5</span> or open-ended <span className="font-mono text-accent">3-</span> for specific pages.
+                  </p>
+                  {numPages !== null && pagesTrimmed !== '' && !pagesValid && (
+                    <p className="text-xs text-danger leading-relaxed">
+                      No valid pages selected. Check the range against this file&apos;s {numPages} pages.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -208,17 +302,29 @@ export default function WatermarkPage() {
                       </div>
 
                       <div className="flex flex-col gap-1.5">
-                        <label className="text-[11px] font-bold text-muted uppercase tracking-wide">Rotation</label>
-                        <select
+                        <label className="text-[11px] font-bold text-muted uppercase tracking-wide">Rotation ({rotation}°)</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="359"
+                          step="1"
                           value={rotation}
                           onChange={(e) => setRotation(parseInt(e.target.value))}
-                          className="h-10 px-3 rounded-lg border border-border bg-surface text-sm text-foreground focus:outline-none focus:border-accent transition-colors"
-                        >
-                          <option value="0">0° Horizontal</option>
-                          <option value="30">30° Diagonal</option>
-                          <option value="45">45° Diagonal</option>
-                          <option value="90">90° Vertical</option>
-                        </select>
+                          className="h-10 cursor-pointer accent-accent"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[11px] font-bold text-muted uppercase tracking-wide">Font Size ({fontSize}pt)</label>
+                        <input
+                          type="range"
+                          min="12"
+                          max="200"
+                          step="1"
+                          value={fontSize}
+                          onChange={(e) => setFontSize(parseInt(e.target.value))}
+                          className="h-10 cursor-pointer accent-accent"
+                        />
                       </div>
                     </motion.div>
                   )}
@@ -227,7 +333,7 @@ export default function WatermarkPage() {
                 <div className="sticky bottom-3 lg:static">
                   <button
                     onClick={handleSubmit}
-                    disabled={isSubmitting || !text}
+                    disabled={isSubmitting || !text || !pagesValid}
                     className="w-full h-11 flex items-center justify-center rounded-xl bg-accent text-accent-foreground text-sm font-semibold hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
                   >
                     {isSubmitting ? 'Watermarking...' : 'Add Watermark'}
@@ -238,8 +344,8 @@ export default function WatermarkPage() {
               {/* Preview — the one card */}
               <div className="min-w-0 order-2 rounded-xl border border-card-border bg-surface shadow-sm overflow-hidden">
                 <div className="flex items-center justify-between gap-3 min-w-0 px-3.5 sm:px-4 py-3 border-b border-border">
-                  <span className="text-[13px] font-semibold truncate">02 — Watermark preview</span>
-                  <span className="shrink-0 font-mono text-xs tabular-nums text-muted">{color} · {Math.round(opacity * 100)}% · {rotation}°</span>
+                  <span className="text-[13px] font-semibold truncate">02 — Watermark preview · {isPagesAll ? (numPages !== null ? `all ${numPages} pages` : 'all pages') : `${selectedPages.size} page${selectedPages.size === 1 ? '' : 's'}`}</span>
+                  <span className="shrink-0 font-mono text-xs tabular-nums text-muted">{color} · {Math.round(opacity * 100)}% · {rotation}° · {fontSize}pt</span>
                 </div>
                 <div className="p-3 sm:p-4">
                   <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden flex flex-col items-center">
@@ -258,13 +364,14 @@ export default function WatermarkPage() {
                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden p-6">
                             {text && (
                               <span
-                                className="text-2xl font-extrabold select-none text-center break-words max-w-full transition-all duration-300"
+                                className="font-extrabold select-none text-center break-words max-w-full transition-all duration-300"
                                 style={{
                                   color: color.toLowerCase() === 'black' ? '#111111' :
                                          color.toLowerCase() === 'red' ? '#DC2626' :
                                          color.toLowerCase() === 'green' ? '#16A34A' :
                                          color.toLowerCase() === 'blue' ? '#2563EB' : '#808080',
                                   opacity: opacity,
+                                  fontSize: `${Math.round(fontSize * 0.5)}px`,
                                   transform: `rotate(-${rotation}deg)`,
                                   transformOrigin: 'center center',
                                 }}
@@ -284,7 +391,11 @@ export default function WatermarkPage() {
                       )}
                     </div>
                     <p className="mt-2.5 text-center text-xs text-muted max-w-[40ch]">
-                      {text ? 'Showing live overlay. Output PDF will be stamped on all pages.' : 'Type watermark text to preview the overlay here.'}
+                      {text
+                        ? isPagesAll
+                          ? `Showing live overlay. Output PDF will be stamped on all ${numPages ?? ''} pages${numPages ? '' : ''}.`.replace('  ', ' ')
+                          : `Showing live overlay. Output PDF will be stamped on ${selectedPages.size} page${selectedPages.size === 1 ? '' : 's'} (${[...selectedPages].sort((a, b) => a - b).slice(0, 8).join(', ')}${selectedPages.size > 8 ? ', …' : ''}).`
+                        : 'Type watermark text to preview the overlay here.'}
                     </p>
                   </div>
                 </div>
@@ -404,13 +515,14 @@ export default function WatermarkPage() {
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden p-12">
                 {text && (
                   <span
-                    className="text-4xl md:text-6xl font-extrabold select-none text-center break-words max-w-full transition-all duration-300"
+                    className="font-extrabold select-none text-center break-words max-w-full transition-all duration-300"
                     style={{
                       color: color.toLowerCase() === 'black' ? '#111111' :
                              color.toLowerCase() === 'red' ? '#DC2626' :
                              color.toLowerCase() === 'green' ? '#16A34A' :
                              color.toLowerCase() === 'blue' ? '#2563EB' : '#808080',
                       opacity: opacity,
+                      fontSize: `${fontSize}px`,
                       transform: `rotate(-${rotation}deg)`,
                       transformOrigin: 'center center',
                     }}

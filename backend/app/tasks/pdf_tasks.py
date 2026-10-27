@@ -45,6 +45,35 @@ def _download_name(original_filename: str | None, fallback: str, build) -> str:
     return fallback
 
 
+def _resolve_ghostscript_binary() -> str:
+    """Resolve the Ghostscript binary robustly across platforms.
+
+    On Windows the binary is ``gswin64c.exe``/``gswin32c.exe``, not ``gs``,
+    so probe ``shutil.which`` first then fall back to well-known install
+    locations (mirrors the LibreOffice probing in ``docx_to_pdf_task``).
+    """
+    for name in ("gswin64c", "gswin32c", "gs"):
+        found = shutil.which(name)
+        if found:
+            return found
+    candidates = [
+        r"D:/gs10.05.1/bin/gswin64c.exe",
+        r"D:\gs10.05.1\bin\gswin64c.exe",
+        r"C:\Program Files\gs\gs10.05.1\bin\gswin64c.exe",
+        r"C:\Program Files (x86)\gs\gs10.05.1\bin\gswin32c.exe",
+        r"C:\Program Files\gs\bin\gswin64c.exe",
+        r"C:\Program Files (x86)\gs\bin\gswin32c.exe",
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    raise Exception(
+        "Ghostscript is not installed or not on PATH. "
+        "Install Ghostscript (gswin64c/gswin32c on Windows, gs elsewhere) "
+        "and ensure it is reachable via PATH."
+    )
+
+
 def compress_pdf_task(file_path: str, quality: str, original_filename: str = None) -> tuple[bytes, str]:
     """Run Ghostscript compression and return the compressed PDF bytes."""
     logger.info(f"Starting compression task for {file_path} with quality {quality}")
@@ -67,7 +96,7 @@ def compress_pdf_task(file_path: str, quality: str, original_filename: str = Non
     output_path = os.path.join(output_dir, output_filename)
 
     gs_cmd = [
-        "gs",
+        _resolve_ghostscript_binary(),
         "-sDEVICE=pdfwrite",
         "-dCompatibilityLevel=1.4",
         f"-dPDFSETTINGS={preset}",
@@ -131,6 +160,13 @@ def compress_pdf_task(file_path: str, quality: str, original_filename: str = Non
     except subprocess.CalledProcessError as e:
         logger.error(f"Ghostscript failed (exit code {e.returncode}): {e.stderr}")
         raise Exception(f"Ghostscript compression failed: {e.stderr}")
+    except FileNotFoundError as e:
+        logger.error(f"Ghostscript binary not found: {e}")
+        raise Exception(
+            "Ghostscript is not installed or not on PATH. "
+            "Install Ghostscript (gswin64c/gswin32c on Windows, gs elsewhere) "
+            "and ensure it is reachable via PATH."
+        )
     except Exception as e:
         logger.error(f"Task failed: {str(e)}")
         raise e
@@ -324,6 +360,105 @@ def _parse_merge_pages_spec(pages_spec: str, total_pages: int, file_index: int) 
             "Expected formats like '1-3', '5', '3-' or 'all'.",
         )
     return pages
+
+
+def _parse_watermark_pages(pages: str, total_pages: int) -> list[int]:
+    """Parse a 1-based pages string into zero-based page indices.
+
+    Supports ``all`` (case-insensitive), comma-separated numbers, closed
+    ranges (``1-3``) and open-ended ranges (``3-`` means 3 to end).
+    Raises ``HTTPException`` 400 for unparsable input, empty selection,
+    or page numbers beyond ``total_pages``.
+    """
+    if not isinstance(pages, str):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid pages specification: must be a string like '1-3, 5' or 'all'.",
+        )
+    s = pages.strip()
+    if not s:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid pages specification: no pages selected. "
+            "Expected formats like '1-3', '5', '3-' or 'all'.",
+        )
+    if s.lower() == "all":
+        return list(range(total_pages))
+    result: list[int] = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            if part.count("-") != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages}': could not parse range '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            start_str, end_str = part.split("-", 1)
+            start_str = start_str.strip()
+            end_str = end_str.strip()
+            if not start_str and not end_str:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages}': could not parse range '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            try:
+                start = 1 if not start_str else int(start_str)
+                end = total_pages if not end_str else int(end_str)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages}': could not parse range '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            if start < 1 or end < 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages}': page numbers must be >= 1.",
+                )
+            if start > end:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages}': start page {start} exceeds "
+                    f"end page {end} in range '{part}'.",
+                )
+            for p in range(start, end + 1):
+                if p < 1 or p > total_pages:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Page {p} out of range: file has {total_pages} pages.",
+                    )
+                result.append(p - 1)
+        else:
+            try:
+                p = int(part)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages}': could not parse '{part}'. "
+                    "Expected formats like '1-3', '5', '3-' or 'all'.",
+                )
+            if p < 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pages specification '{pages}': page numbers must be >= 1.",
+                )
+            if p > total_pages:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Page {p} out of range: file has {total_pages} pages.",
+                )
+            result.append(p - 1)
+    if not result:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid pages specification '{pages}': no pages selected. "
+            "Expected formats like '1-3', '5', '3-' or 'all'.",
+        )
+    return result
 
 
 def merge_pdfs_task(
@@ -722,7 +857,7 @@ def docx_to_pdf_task(file_path: str, original_filename: str = None) -> tuple[byt
         cleanup_paths(file_path, output_path)
 
 
-def create_watermark_pdf(output_path, text, color="gray", opacity=0.3, rotation=45):
+def create_watermark_pdf(output_path, text, color="gray", opacity=0.3, rotation=45, font_size=48):
     from reportlab.pdfgen import canvas
     from reportlab.lib.colors import HexColor
     from reportlab.lib.pagesizes import letter
@@ -742,7 +877,7 @@ def create_watermark_pdf(output_path, text, color="gray", opacity=0.3, rotation=
     }
     hex_color = colors_map.get(color.lower(), "#808080")
     c.setFillColor(HexColor(hex_color))
-    c.setFont("Helvetica", 48)
+    c.setFont("Helvetica", font_size)
     c.drawCentredString(0, 0, text)
     c.save()
 
@@ -863,9 +998,11 @@ def watermark_pdf_task(
     color: str = "gray",
     opacity: float = 0.3,
     rotation: int = 45,
+    font_size: int = 48,
+    pages: str = "all",
     original_filename: str = None,
 ) -> tuple[bytes, str]:
-    """Apply a text watermark to all PDF pages and return the bytes."""
+    """Apply a text watermark to selected PDF pages and return the bytes."""
     logger.info(f"Starting PDF watermarking task for {file_path}")
 
     file_path = resolve_path(file_path)
@@ -879,15 +1016,19 @@ def watermark_pdf_task(
 
     try:
         temp_watermark_pdf = os.path.join(output_dir, f"temp_wm_{uuid.uuid4()}.pdf")
-        create_watermark_pdf(temp_watermark_pdf, text, color, opacity, rotation)
+        create_watermark_pdf(temp_watermark_pdf, text, color, opacity, rotation, font_size)
 
         reader = PdfReader(file_path)
         wm_reader = PdfReader(temp_watermark_pdf)
         wm_page = wm_reader.pages[0]
 
+        total_pages = len(reader.pages)
+        target_indices = set(_parse_watermark_pages(pages, total_pages))
+
         writer = PdfWriter()
-        for page in reader.pages:
-            page.merge_page(wm_page)
+        for idx, page in enumerate(reader.pages):
+            if idx in target_indices:
+                page.merge_page(wm_page)
             writer.add_page(page)
 
         with open(output_path, "wb") as f:

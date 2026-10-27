@@ -317,14 +317,21 @@ def watermark_pdf(
     text: str = Form(...),
     color: str = Form("gray"),
     opacity: float = Form(0.3),
-    rotation: int = Form(45)
+    rotation: int = Form(45),
+    font_size: int = Form(48),
+    pages: str = Form("all")
 ):
     validate_file_size(file, 30)
     validate_extension(file.filename, (".pdf",), "Only PDF files are supported.")
 
+    if rotation < 0 or rotation > 359:
+        raise HTTPException(status_code=400, detail="Invalid rotation angle. Must be between 0 and 359 degrees.")
+    if font_size < 12 or font_size > 200:
+        raise HTTPException(status_code=400, detail="Invalid font size. Must be between 12 and 200.")
+
     relative_path = save_upload_file(file, ".pdf")
     try:
-        data, download_name = watermark_pdf_task(relative_path, text, color, opacity, rotation, original_filename=file.filename)
+        data, download_name = watermark_pdf_task(relative_path, text, color, opacity, rotation, font_size, pages, original_filename=file.filename)
     except HTTPException:
         raise
     except Exception as e:

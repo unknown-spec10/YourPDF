@@ -1,24 +1,20 @@
-# YourPDF: Production Deployment
+# YourPDF: Deployment
 
-All processing runs server-side (FastAPI + Celery + Redis). This document covers deploying the actual compose stack. Service names below match `docker-compose.prod.yml` exactly — use them verbatim in `docker compose` commands.
+All processing runs server-side and synchronously (FastAPI, no queue). This document covers the two real deployment paths plus local dev. Service names below match `docker-compose.prod.yml` exactly — use them verbatim in `docker compose` commands.
 
 ## 1. Topology
 
 ```
-Browser ── port 80 ──→ Nginx ─┬─ / ─────→ frontend:3000 (Next.js standalone)
-                               └─ /api/* ─→ backend:8000 (uvicorn --workers 2)
-backend ⇄ redis:6379 ─ celery_worker ─→ backend/static/outputs
-flower :5555 (Celery monitoring, basic auth)
+Browser ── port 80 ──→ Nginx ─┬─ / ───────→ frontend:3000 (Next.js standalone)
+                               ├─ /api/* ──→ backend:8000 (uvicorn --workers 2)
+                               └─ /static/ → backend:8000 (fallback)
 ```
 
-Prod services (`docker-compose.prod.yml`): `redis`, `backend`, `celery_worker`, `flower`, `frontend`, `nginx`.
-Dev services (`docker-compose.yml`): `redis`, `celery_worker` only — the backend runs on the host for hot-reload.
+Prod services (`docker-compose.prod.yml`): `backend`, `frontend`, `nginx` (+ `tmp_data` / `static_data` volumes). No Redis, no worker, no Flower.
 
-All state is in Redis (broker + result backend, `result_expires=86400`) and short-lived output files (15-min auto-expiry via `delete_local_file_task`). No database to back up.
+The app is stateless (no database, no broker) — uploads live only for the duration of a request and are deleted best-effort via `cleanup_paths`.
 
-The architecture is stateless and serverless-friendly, so anyone can deploy it anywhere. Serverless platforms like Cloud Run are a good fit.
-
-## 2. Host Requirements
+## 2. Host requirements
 
 - Any x86_64 host with 2 vCPU and 4 GB RAM recommended for Ghostscript/LibreOffice work.
 - Firewall: open `22` (SSH) and `80` (HTTP).
@@ -26,47 +22,42 @@ The architecture is stateless and serverless-friendly, so anyone can deploy it a
 
 ## 3. Environment
 
-Create a root-level `.env` next to `docker-compose.prod.yml` (values are names only — never commit real secrets):
+Create a root-level `.env` next to `docker-compose.prod.yml` (names only — never commit real secrets):
 
 ```env
-REDIS_PASSWORD=change-me-in-production
+DOCKERHUB_USERNAME=deepdocker2023
 API_KEY=change-me-in-production
-FLOWER_USER=admin
-FLOWER_PASSWORD=change-me-in-production
-# CORS_ORIGINS=https://your-domain
-# DOCKERHUB_USERNAME=           # defaults to unknowndockerishere
+CORS_ORIGINS=https://your-domain
 ```
 
 What each does:
 
 | Variable | Consumed by | Effect |
 |---|---|---|
-| `REDIS_PASSWORD` | `redis`, `backend`, `celery_worker`, `flower` | Redis `--requirepass`; threaded into every `REDIS_URL=redis://:<pw>@redis:6379/0` |
-| `API_KEY` | `backend` | When non-empty, all `/api/*` routes require matching `X-API-Key`; unset = auth off. Must equal frontend `NEXT_PUBLIC_API_KEY` (baked into the frontend image at build) |
-| `FLOWER_USER` / `FLOWER_PASSWORD` | `flower` | Basic auth for `celery flower` on port 5555 |
+| `DOCKERHUB_USERNAME` | compose image fields | Registry namespace; defaults to `deepdocker2023` (`.../yourpdf-backend:latest`, `.../yourpdf-frontend:latest`, single `latest` tag) |
+| `API_KEY` | `backend` | When non-empty, all `/api/*` routes require matching `X-API-Key`; unset = auth off. Must equal the frontend `NEXT_PUBLIC_API_KEY` baked into the frontend image at build |
 | `CORS_ORIGINS` | `backend` | Allowed browser origins (default `http://localhost:3000`) |
 
-Backend image installs Python deps from pinned `backend/requirements.lock` and runs as non-root (`appuser`). Healthchecks: Redis `redis-cli ping`, backend `GET /health`, worker `celery inspect ping`.
+Backend image installs Python deps from pinned `backend/requirements.lock` and runs as non-root (`appuser`). Healthcheck: backend `GET /health`.
 
-## 4. Launch
+## 4. Launch (self-host)
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml ps
 ```
 
-Expected: 6 services `Up` — `yourpdf-prod-redis`, `yourpdf-prod-backend`, `yourpdf-prod-celery-worker`, `yourpdf-prod-flower`, `yourpdf-prod-frontend`, `yourpdf-prod-nginx`.
+Expected: 3 services `Up` — `yourpdf-prod-backend` (healthy), `yourpdf-prod-frontend`, `yourpdf-prod-nginx`.
 
-Nginx binds host port `80`: `/` → frontend, `/api/*` → backend (10r/s rate limit, burst 20), `/static/*` served by the backend. Flower listens on host port `5555`.
+Nginx binds host port `80`: `/` → frontend, `/api/*` → backend (10r/s rate limit, burst 20), `/static/*` → backend.
 
 ## 5. Operations
 
 ```bash
 # Logs
 docker compose -f docker-compose.prod.yml logs -f backend
-docker compose -f docker-compose.prod.yml logs -f celery_worker
-docker compose -f docker-compose.prod.yml logs -f flower
-docker compose -f docker-compose.prod.yml logs -f redis
+docker compose -f docker-compose.prod.yml logs -f frontend
+docker compose -f docker-compose.prod.yml logs -f nginx
 
 # Status / health
 docker compose -f docker-compose.prod.yml ps
@@ -91,17 +82,47 @@ To stop: `docker compose -f docker-compose.prod.yml down`.
 
 ## 6. Verify
 
-1. `docker compose -f docker-compose.prod.yml ps` — all 6 services `Up` (backend/worker `healthy`).
-2. Open `http://<host>/compress`, process a file, download the result.
-3. File served from `static_data` volume, deleted by the Celery cleaner 15 minutes after creation.
-4. Flower: `http://<host>:5555` with `FLOWER_USER`/`FLOWER_PASSWORD`.
+1. `docker compose -f docker-compose.prod.yml ps` — all 3 services `Up` (backend `healthy`).
+2. Open `http://<host>/compress`, process a file, download the result directly.
+3. Response carries `Content-Disposition: attachment`; nothing is stored server-side after the request.
 
-## 7. Local Dev (for reference)
+## 7. Local dev (host only, no compose)
+
+No dev compose file exists — the dev flow runs entirely on the host.
 
 ```bash
-docker compose up -d                                   # redis + celery_worker
-docker compose ps                                      # yourpdf-redis, yourpdf-celery-worker
-docker compose logs -f celery_worker
-cd backend && pip install -r requirements.lock && uvicorn app.main:app --reload --port 8000
-cd ../frontend && npm install && npm run dev
+# Backend (from backend/; venv lives at repo-root ../myenv)
+cd backend
+../myenv/Scripts/activate        # Windows (use `source ../myenv/bin/activate` on Linux/macOS)
+pip install -r requirements.lock
+uvicorn app.main:app --port 8000
 ```
+
+```bash
+# Frontend (new terminal)
+cd frontend
+npm install
+npm run dev -- --webpack
+```
+
+Open `http://localhost:3000` (backend CORS defaults to `http://localhost:3000`, localhost-only).
+
+## 8. Cloud Run production
+
+Live services (`us-central1`): `yourpdf-frontend` and `yourpdf-backend`, images `deepdocker2023/yourpdf-frontend:latest` and `deepdocker2023/yourpdf-backend:latest` (single `latest` tag, no versioning).
+
+```bash
+# Re-tag local builds with the registry prefix (index.docker.io explicit)
+docker tag yourpdf-backend:latest index.docker.io/deepdocker2023/yourpdf-backend:latest
+docker tag yourpdf-frontend:latest index.docker.io/deepdocker2023/yourpdf-frontend:latest
+docker push index.docker.io/deepdocker2023/yourpdf-backend:latest
+docker push index.docker.io/deepdocker2023/yourpdf-frontend:latest
+
+# Roll the Cloud Run services to the new images
+gcloud run services update yourpdf-backend --region us-central1 \
+  --image index.docker.io/deepdocker2023/yourpdf-backend:latest
+gcloud run services update yourpdf-frontend --region us-central1 \
+  --image index.docker.io/deepdocker2023/yourpdf-frontend:latest
+```
+
+Set `API_KEY` / `CORS_ORIGINS` (backend) and `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_API_KEY` (frontend, baked at build) via the Cloud Run console or `--set-env-vars` so the frontend origin is allow-listed and keys match.

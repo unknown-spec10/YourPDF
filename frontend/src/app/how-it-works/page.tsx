@@ -59,9 +59,9 @@ export default function HowItWorksPage() {
               <Cpu className="h-5 w-5" strokeWidth={1.8} />
             </div>
             <div className="mt-4">
-              <h3 className="text-[16px] font-semibold tracking-tight text-foreground">1. Local processing</h3>
+              <h3 className="text-[16px] font-semibold tracking-tight text-foreground">1. Server-side processing</h3>
               <p className="mt-2 text-sm leading-relaxed text-muted">
-                Many tools (like merging, splitting, and text extraction) can be calculated on your own device. We implement local processing routines to perform these operations directly inside your browser. No files are uploaded to any server.
+                Every tool — from merging and splitting to text extraction — runs on our servers. Your browser simply uploads the file and downloads the finished result; no PDF work happens on your device.
               </p>
             </div>
           </div>
@@ -73,7 +73,7 @@ export default function HowItWorksPage() {
             <div className="mt-4">
               <h3 className="text-[16px] font-semibold tracking-tight text-foreground">2. Ephemeral server tasks</h3>
               <p className="mt-2 text-sm leading-relaxed text-muted">
-                For heavy tasks (like compression and image rasterization), we use sandbox environments to execute operations. Files are stored temporarily inside a secure, write-only directory and are hard-deleted automatically within 15 minutes.
+                For heavy tasks (like compression and image rasterization), we use sandbox environments to execute operations. Files are processed in an ephemeral temp space and hard-deleted immediately after the task completes (best-effort, on every request).
               </p>
             </div>
           </div>
@@ -83,12 +83,12 @@ export default function HowItWorksPage() {
         <motion.section variants={itemVariants} className="rounded-2xl border border-border bg-surface p-6 shadow-sm md:p-8">
           <h2 className="flex items-center gap-2.5 text-lg font-semibold tracking-tight text-foreground md:text-xl">
             <ShieldCheck className="h-5 w-5 text-accent" />
-            <span>Local ephemeral processing</span>
+            <span>Server-side ephemeral processing</span>
           </h2>
 
           <div className="mt-5 flex flex-col gap-5 text-sm leading-relaxed text-muted">
             <p>
-              All processing runs server-side. Files are processed on ephemeral workers and served back directly as file responses:
+              All processing runs server-side. Each upload is handled synchronously in an ephemeral temp space, and the processed file bytes are returned directly in the response:
             </p>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -97,7 +97,7 @@ export default function HowItWorksPage() {
                   <Lock className="h-4 w-4 text-accent" />
                   <span>Direct file responses</span>
                 </div>
-                <span className="mt-2 block text-[13px] leading-relaxed">Processed files are served directly from the backend as downloads expiring in 15 minutes.</span>
+                <span className="mt-2 block text-[13px] leading-relaxed">The processed file bytes come back directly in the response and are saved as a download — no queue, no polling, no expiring link.</span>
               </div>
 
               <div className="rounded-xl border border-border bg-background p-4">
@@ -105,7 +105,7 @@ export default function HowItWorksPage() {
                   <EyeOff className="h-4 w-4 text-accent" />
                   <span>Ephemeral outputs</span>
                 </div>
-                <span className="mt-2 block text-[13px] leading-relaxed">Processed files live briefly in a dedicated output folder on the worker host.</span>
+                <span className="mt-2 block text-[13px] leading-relaxed">Uploads and outputs live only in an ephemeral temp directory for the duration of the request.</span>
               </div>
 
               <div className="rounded-xl border border-border bg-background p-4">
@@ -113,12 +113,12 @@ export default function HowItWorksPage() {
                   <Trash2 className="h-4 w-4 text-danger" />
                   <span>Auto-cleanup</span>
                 </div>
-                <span className="mt-2 block text-[13px] leading-relaxed">An active Celery task polls every minute to delete temporary files that are older than 15 minutes.</span>
+                <span className="mt-2 block text-[13px] leading-relaxed">Temporary files are hard-deleted the moment the task finishes — not on a timer, with no background cleaner.</span>
               </div>
             </div>
 
             <p>
-              By dividing tasks between your browser and ephemeral workers, we ensure large files are processed efficiently without sacrificing privacy. All code is open-source, allowing you to run it locally on your computer using Docker.
+              Because everything runs server-side in short-lived tasks that clean up after themselves, large files are processed efficiently without sacrificing privacy. All code is open-source, allowing you to run it locally on your computer using Docker.
             </p>
           </div>
         </motion.section>
@@ -135,20 +135,20 @@ export default function HowItWorksPage() {
             <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted md:rotate-0" />
             <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-border bg-background p-4 text-center">
               <Server className="h-4 w-4 text-muted" />
-              <span className="text-[13px] font-semibold text-foreground">Celery worker</span>
-              <span className="text-xs leading-relaxed text-muted">Process is sandboxed, converting/compressing file.</span>
+              <span className="text-[13px] font-semibold text-foreground">Server task</span>
+              <span className="text-xs leading-relaxed text-muted">Request is handled synchronously, converting/compressing the file.</span>
             </div>
             <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted md:rotate-0" />
             <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-border bg-background p-4 text-center">
               <Trash2 className="h-4 w-4 text-muted" />
-              <span className="text-[13px] font-semibold text-foreground">60s disk purge</span>
+              <span className="text-[13px] font-semibold text-foreground">Immediate cleanup</span>
               <span className="text-xs leading-relaxed text-muted">Original and temp files are deleted from backend disk immediately.</span>
             </div>
             <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted md:rotate-0" />
             <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-border bg-background p-4 text-center">
               <Clock className="h-4 w-4 text-muted" />
-              <span className="text-[13px] font-semibold text-foreground">15m expiry</span>
-              <span className="text-xs leading-relaxed text-muted">Download links or fallback static files expire &amp; vanish.</span>
+              <span className="text-[13px] font-semibold text-foreground">Direct download</span>
+              <span className="text-xs leading-relaxed text-muted">File bytes return in the response; the browser builds the download.</span>
             </div>
           </div>
         </motion.section>

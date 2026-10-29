@@ -19,8 +19,9 @@ from app.tasks import (
     watermark_pdf_task,
     add_page_numbers_task,
     ocr_pdf_task,
+    sign_pdf_task,
 )
-from app.uploads import save_multi_upload, save_upload_file
+from app.uploads import save_multi_upload, save_upload_file, save_uploaded_image
 from app.validation import validate_extension, validate_file_size
 
 router = APIRouter()
@@ -118,7 +119,8 @@ def split_pdf(
 def pdf_to_images(
     file: UploadFile = File(...),
     format: str = Form("png"),
-    dpi: int = Form(150)
+    dpi: int = Form(150),
+    pages: str = Form("all"),
 ):
     validate_file_size(file, 30)
     validate_extension(file.filename, (".pdf",), "Only PDF files are supported.")
@@ -128,7 +130,9 @@ def pdf_to_images(
 
     relative_path = save_upload_file(file, ".pdf")
     try:
-        data, download_name = pdf_to_images_task(relative_path, format, dpi, original_filename=file.filename)
+        data, download_name = pdf_to_images_task(
+            relative_path, format, dpi, original_filename=file.filename, pages=pages
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -352,6 +356,69 @@ def add_page_numbers(
     relative_path = save_upload_file(file, ".pdf")
     try:
         data, download_name = add_page_numbers_task(relative_path, position, original_filename=file.filename)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return _file_response(data, download_name)
+
+
+@router.post("/sign")
+def sign_pdf(
+    file: UploadFile = File(...),
+    signature: UploadFile = File(...),
+    pages: str = Form("all"),
+    cx: float = Form(50.0),
+    cy: float = Form(50.0),
+    width: float = Form(25.0),
+    rotation: float = Form(0.0),
+    add_date: bool = Form(False),
+    date_text: str = Form(""),
+    date_size: float = Form(12.0),
+    date_position: str = Form("below"),
+):
+    validate_file_size(file, 30)
+    validate_extension(file.filename, (".pdf",), "Only PDF files are supported.")
+
+    validate_file_size(signature, 5)
+    validate_extension(
+        signature.filename,
+        (".png", ".jpg", ".jpeg"),
+        "Only PNG, JPG, and JPEG signature images are supported.",
+    )
+
+    if not (0 <= cx <= 100):
+        raise HTTPException(status_code=400, detail="Invalid cx. Must be between 0 and 100.")
+    if not (0 <= cy <= 100):
+        raise HTTPException(status_code=400, detail="Invalid cy. Must be between 0 and 100.")
+    if not (0 < width <= 100):
+        raise HTTPException(status_code=400, detail="Invalid width. Must be between 0 and 100, excluding 0.")
+    if not (-360 <= rotation <= 360):
+        raise HTTPException(status_code=400, detail="Invalid rotation angle. Must be between -360 and 360 degrees.")
+    if not (6 <= date_size <= 40):
+        raise HTTPException(status_code=400, detail="Invalid date_size. Must be between 6 and 40.")
+    if date_position not in ("below", "above"):
+        raise HTTPException(status_code=400, detail="Invalid date_position. Must be 'below' or 'above'.")
+    if len((date_text or "").strip()) > 100:
+        raise HTTPException(status_code=400, detail="Date text is too long (max 100 characters).")
+
+    relative_path = save_upload_file(file, ".pdf")
+    _, sig_relative_path = save_uploaded_image(signature, "sign")
+    try:
+        data, download_name = sign_pdf_task(
+            relative_path,
+            sig_relative_path,
+            pages=pages,
+            cx=cx,
+            cy=cy,
+            width=width,
+            rotation=rotation,
+            add_date=add_date,
+            date_text=date_text,
+            date_size=date_size,
+            date_position=date_position,
+            original_filename=file.filename,
+        )
     except HTTPException:
         raise
     except Exception as e:

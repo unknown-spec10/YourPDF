@@ -292,3 +292,28 @@ p {
   background: var(--border);
   border-radius: 8px;
 }
+
+/* Signature studio fonts (self-hosted, font-display: swap) */
+@font-face {
+  font-family: 'Caveat-Sign';
+  src: url('/fonts/caveat.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'GreatVibes-Sign';
+  src: url('/fonts/greatvibes.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'HomemadeApple-Sign';
+  src: url('/fonts/homemadeapple.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

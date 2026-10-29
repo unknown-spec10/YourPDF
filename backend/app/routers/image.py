@@ -13,7 +13,7 @@ from app.tasks import (
     watermark_image_task,
 )
 from app.uploads import save_uploaded_image
-from app.validation import validate_image_file
+from app.validation import validate_extension, validate_file_size, validate_image_file
 
 router = APIRouter()
 
@@ -29,6 +29,7 @@ def _media_type_for(filename: str) -> str:
         ".tiff": "image/tiff",
         ".tif": "image/tiff",
         ".gif": "image/gif",
+        ".svg": "image/svg+xml",
     }.get(ext, "application/octet-stream")
 
 
@@ -103,15 +104,23 @@ def crop_image(
 @router.post("/image/convert")
 def convert_image(
     file: UploadFile = File(...),
-    target_format: str = Form(...)
+    target_format: str = Form(...),
+    render_width: int | None = Form(None),
 ):
-    validate_image_file(file)
+    validate_file_size(file, 30)
+    validate_extension(
+        file.filename,
+        (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".gif", ".svg"),
+        "Only JPG, JPEG, PNG, WEBP, BMP, TIFF, TIF, GIF, and SVG image files are supported.",
+    )
+    if render_width is not None and not (64 <= render_width <= 8000):
+        raise HTTPException(status_code=400, detail="Invalid render_width. Must be between 64 and 8000 pixels.")
     target_format = target_format.lower()
-    if target_format not in ["jpg", "jpeg", "png", "webp", "bmp", "tiff"]:
-        raise HTTPException(status_code=400, detail="Invalid target format. Supported: JPG, JPEG, PNG, WEBP, BMP, TIFF.")
+    if target_format not in ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "svg"]:
+        raise HTTPException(status_code=400, detail="Invalid target format. Supported: JPG, JPEG, PNG, WEBP, BMP, TIFF, SVG.")
     _, relative_path = save_uploaded_image(file, "convert")
     try:
-        data, download_name = convert_image_task(relative_path, target_format, original_filename=file.filename)
+        data, download_name = convert_image_task(relative_path, target_format, original_filename=file.filename, render_width=render_width)
     except HTTPException:
         raise
     except Exception as e:

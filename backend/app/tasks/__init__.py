@@ -33,6 +33,7 @@ from app.tasks.pdf_tasks import (
     pdf_to_docx_task,
     pdf_to_images_task,
     rotate_pdf_task,
+    sign_pdf_task,
     split_pdf_task,
     watermark_pdf_task,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "resize_image_task",
     "rotate_image_task",
     "rotate_pdf_task",
+    "sign_pdf_task",
     "split_pdf_task",
     "watermark_image_task",
     "watermark_pdf_task",

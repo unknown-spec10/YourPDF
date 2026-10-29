@@ -1,249 +1,169 @@
 # YourPDF & YourImage
 
-YourPDF is a production-grade, privacy-first, open-source PDF, image, and office-file processing platform.
+YourPDF is a privacy-first, open-source PDF, image, and office-file processing platform.
 
-**All processing runs server-side.** The Next.js frontend uploads files to the FastAPI backend, which dispatches Celery jobs over Redis. The browser only uploads files and downloads results; it performs no processing. Privacy comes from self-hosting plus automatic 15-minute expiry of every output file (deleted by a Celery cleaner task).
+**All processing runs server-side and synchronously.** The Next.js frontend uploads files directly to the FastAPI backend; every `POST` returns processed bytes (or JSON for text extraction) in the same response. There is **no Celery, no Redis, no Flower, no job queue, no polling, and no database**. Uploads land in `backend/tmp/` and are deleted best-effort right after each task via `cleanup_paths` in `backend/app/tasks/common.py` — outputs are returned as `Content-Disposition: attachment` downloads, never stored for later retrieval.
 
 ## Features
 
-### PDF Utilities (`frontend/src/app/*`, `backend/app/routers/pdf.py`)
+27 tool pages under `frontend/src/app/`. Every tool page is a client component (`'use client'`) that calls the API directly (`submitJob` in `lib/api.ts`) and downloads the result via a blob object URL (`URL.createObjectURL`).
 
-- **Merge** (`/merge`) — combine multiple PDFs.
-- **Split** (`/split`) — extract page ranges.
-- **Compress** (`/compress`) — Ghostscript/pikepdf size reduction.
-- **PDF to Images** (`/pdf-to-images`) — PNG/JPG per page.
-- **Images to PDF** (`/images-to-pdf`) — lossless via img2pdf.
-- **Extract Text** (`/extract-text`) — text-layer extraction.
-- **PDF to Word** (`/pdf-to-docx`) — via `pdf2docx` (kept; no Markdown converter exists).
+### PDF tools (`backend/app/routers/pdf.py`)
+
+- **Merge** (`/merge`, `/api/merge`) — combine 2+ PDFs. Simple mode appends whole files; custom planner mixes page ranges across files (`"1-3, 5"`, `"all"`, open-ended `"3-"`) via a JSON `plan` of `{file, pages}` blocks.
+- **Split** (`/split`) — extract page ranges (`mode` + `pages_spec`, e.g. `1-3, 5`).
+- **Compress** (`/compress`) — Ghostscript/pikepdf size reduction (`quality`).
+- **PDF to Images** (`/pdf-to-images`) — PNG/JPG per page (`format`, `dpi`, `pages`: `"all"` or `"1-3, 5"`; a single selected page returns a direct image, subsets otherwise ZIP like before).
+- **Images to PDF** (`/images-to-pdf`) — PNG/JPG to PDF via img2pdf.
+- **Extract Text** (`/extract-text`) — layout-preserving text extraction (`extraction_mode="layout"`); returns JSON text in-browser, or a `.txt` download when `export_txt=true`.
+- **PDF to Word** (`/pdf-to-docx`) — via `pdf2docx`; result page renders an in-browser Word preview with `mammoth` (`convertToHtml`) plus a `.docx` download.
 - **Word to PDF** (`/docx-to-pdf`) — via LibreOffice.
-- **Protect** (`/protect`) — password-encrypt, **synchronous**, direct blob download.
-- **Unlock** (`/unlock`) — password-decrypt, **synchronous**, direct blob download.
-- **Rotate** (`/rotate`) — 90/180/270.
-- **Organize** (`/organize`) — reorder pages.
-- **Watermark** (`/watermark`) — text overlay.
-- **Add Page Numbers** (`/add-page-numbers`).
-- **OCR** (`/ocr`) — scanned PDFs to searchable PDF (ocrmypdf/Tesseract).
+- **Protect** (`/protect`) — password-encrypt, synchronous, direct blob download.
+- **Unlock** (`/unlock`) — password-decrypt, synchronous, direct blob download.
+- **Rotate** (`/rotate`) — ANY angle, not presets: slider + numeric input with decimals (e.g. `37.5°`), `-360…360` excluding `0`; negatives rotate counterclockwise. Multiples of 90 use the fast `/Rotate` path; other angles re-render content via transform.
+- **Organize** (`/organize`) — reorder/delete pages (`page_order` spec).
+- **Watermark** (`/watermark`) — text overlay with `text`, `color`, `opacity`, `rotation` (0–359), `font_size` (12–200), and per-page targeting (`pages`: `"all"` or `"1-3, 5"`).
+- **Add Page Numbers** (`/add-page-numbers`) — stamp numbers (`position`, e.g. `bottom-center`).
+- **OCR** (`/ocr`) — scanned PDFs to searchable PDF via ocrmypdf/Tesseract (`language`, default `eng`).
+- **Sign PDF** (`/sign`) — draw, type, or upload a signature; place it on any page with drag, resize, and any-angle rotation; optional date line.
+- **PDF Info** (`/pdf-info`, backend helper, no dedicated page) — returns `{ num_pages }`; used by the merge/watermark pages for page counts.
 
-### Image Utilities (`backend/app/routers/image.py`)
+### Image tools (`backend/app/routers/image.py`)
 
-- **Compress Image** (`/compress-image`) — JPG/PNG/WEBP.
-- **Resize Image** (`/resize-image`) — pixel size or percentage.
-- **Crop Image** (`/crop-image`).
-- **Convert Image** (`/convert-image`) — JPG/PNG/WEBP/BMP/TIFF.
-- **Rotate Image** (`/rotate-image`) — 90/180/270.
-- **Watermark Image** (`/watermark-image`) — text overlay.
+- **Compress Image** (`/image/compress`) — JPG/PNG/WEBP.
+- **Resize Image** (`/image/resize`) — pixel size or percentage.
+- **Crop Image** (`/image/crop`).
+- **Convert Image** (`/image/convert`) — JPG/PNG/WEBP/BMP/TIFF.
+- **Rotate Image** (`/image/rotate`).
+- **Watermark Image** (`/image/watermark`) — text overlay.
 
-### Office Utilities (`backend/app/routers/office.py`)
+### Office tools (`backend/app/routers/office.py`)
 
-- **Merge Word** (`/merge-docx`).
-- **Word to Images** (`/docx-to-images`) — PNG/JPG per page.
-- **PPT to PDF** (`/pptx-to-pdf`) — via LibreOffice.
-- **PPT to Images** (`/pptx-to-images`) — PNG/JPG per slide.
-- **Merge PPT** (`/merge-pptx`).
+- **Merge Word** (`/office/merge-docx`).
+- **Word to Images** (`/office/docx-to-images`) — PNG/JPG per page.
+- **PPT to PDF** (`/office/pptx-to-pdf`) — via LibreOffice.
+- **PPT to Images** (`/office/pptx-to-images`) — PNG/JPG per slide.
+- **Merge PPT** (`/office/merge-pptx`).
 
-26 tool pages total. There is no Convert-to-Markdown tool.
+27 tool pages total. There is no Convert-to-Markdown tool.
 
-## Repository Layout
+## Repository layout
 
 ```
 pdf-toolkit/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py            # FastAPI app: 4 routers, API-key middleware, CORS, /static mount
-│   │   ├── config.py          # pydantic-settings (REDIS_URL, CORS_ORIGINS, API_KEY)
-│   │   ├── celery_app.py      # broker+backend=Redis, result_expires, acks_late
-│   │   ├── uploads.py         # tmp-dir persistence helpers
-│   │   ├── validation.py      # size/extension validation (50 MB default)
-│   │   ├── pdf_security.py    # synchronous protect/unlock (pypdf, in-memory)
-│   │   ├── routers/           # pdf.py, image.py, office.py, system.py (health/status/download)
-│   │   └── tasks/             # pdf_tasks.py, image_tasks.py, office_tasks.py, misc_tasks.py, common.py
-│   ├── Dockerfile             # python:3.12-slim, system deps, requirements.lock, non-root appuser
+│   │   ├── main.py            # FastAPI app: 4 routers at /api + /api/v1, API-key middleware, CORS, /static mount
+│   │   ├── config.py          # pydantic-settings: CORS_ORIGINS, API_KEY (names only; no Redis settings)
+│   │   ├── uploads.py         # tmp-dir persistence helpers (backend/tmp/)
+│   │   ├── validation.py      # 30 MB size cap, per-endpoint extension allowlists
+│   │   ├── pdf_security.py    # protect/unlock helpers (pypdf, in-memory)
+│   │   ├── routers/           # pdf.py, image.py, office.py, system.py (health only)
+│   │   └── tasks/             # pdf_tasks.py, image_tasks.py, office_tasks.py, common.py (cleanup_paths)
+│   ├── Dockerfile             # python:3.12-slim, Ghostscript/poppler/LibreOffice/ocrmypdf, non-root appuser
 │   ├── requirements.txt       # human-edited floor file
 │   └── requirements.lock      # pinned install set — install from this file
-├── frontend/                  # Next.js 16 App Router (TypeScript)
+├── frontend/                  # Next.js 16 App Router, output: standalone (TypeScript)
 │   └── src/
-│       ├── app/               # 26 tool dirs + how-it-works + tools index
-│       ├── lib/api.ts         # API_URL, API_PREFIX, submitJob, buildDownloadUrl, X-API-Key
-│       └── hooks/             # useFileJob.ts wraps useJobPolling.ts
+│       ├── app/               # 27 tool dirs + how-it-works + tools index (all tools are client components)
+│       ├── lib/api.ts         # API_URL, API_PREFIX, submitJob (direct POST → Response), blob-download helpers, X-API-Key
+│       └── hooks/             # useFileJob.ts (direct-download hook: POST, branch JSON vs bytes, blob URL)
 ├── nginx/
-│   └── nginx.conf             # / -> frontend:3000, /api/ -> backend:8000, 10r/s API rate limit
-├── docker-compose.yml         # dev: redis + celery_worker (backend runs on host)
-├── docker-compose.prod.yml    # prod: redis, backend, celery_worker, flower, frontend, nginx
-└── docs/                      # architecture + deploy docs (tracked in git)
+│   └── nginx.conf             # / -> frontend:3000, /api/ -> backend:8000, /static/ -> backend, 10r/s API rate limit
+├── docker-compose.prod.yml   # prod: backend (uvicorn --workers 2), frontend, nginx
+└── docs/                      # architecture.md + deploy.md
 ```
 
-## Request Flow
-
-All tools except Protect/Unlock (synchronous, see below) follow the async job pattern:
+## Request flow (synchronous, every tool)
 
 ```
 1. Tool page builds FormData (buildSingleFileFormData / buildMultiFileFormData in lib/api.ts)
 2. useFileJob submitter calls submitJob('/api/<endpoint>', formData)
    → api.ts resolveApiPath() rewrites to canonical /api/v1/<endpoint>
    → POST multipart to FastAPI (X-API-Key header when NEXT_PUBLIC_API_KEY is set)
-3. Router validates file (validation.py), saves to backend/tmp/ (uploads.py),
-   enqueues Celery task, returns 202 { job_id, status }
-4. useJobPolling polls GET /api/v1/status/{job_id} every 2s
-   → queued → processing (Celery PROGRESS meta) → done | error
-5. done returns result.download_url = /api/v1/download/{filename}?original_name=...
-6. GET /api/v1/download/{filename}: FileResponse from backend/static/outputs/
-7. Cleanup after 15 min: delete_local_file_task via Celery countdown
+3. Router validates file (validation.py: 30 MB cap, extension allowlist),
+   saves to backend/tmp/ (uploads.py), calls the sync task function inline
+4. Task processes and returns bytes; router returns them with
+   Content-Disposition: attachment (extract-text without export returns JSON { text })
+5. Frontend branches on content-type: JSON → render text; bytes → res.blob() →
+   URL.createObjectURL → download link
+6. finally: cleanup_paths() deletes the upload and any temp output best-effort
 ```
 
-**Protect/Unlock are synchronous:** `POST /api/protect` and `POST /api/unlock` call `protect_pdf_bytes`/`unlock_pdf_bytes` inline (no Celery queue, no job_id). The frontend `fetch()`es the endpoint, reads `res.blob()`, and downloads via `URL.createObjectURL` — no polling.
+No `job_id`, no `/status/{id}` polling, no `/download/{filename}` round-trip.
 
-## Storage (Local Ephemeral Processing)
+## Local development
 
-Processed files are written to `backend/static/outputs/` and served directly as file responses from the same download endpoint (also mounted at `/static` for direct access). Each output is scheduled for deletion 15 minutes after creation via `delete_local_file_task` with a Celery countdown.
-
-The architecture is stateless and serverless-friendly, so anyone can deploy it anywhere. Serverless platforms like Cloud Run are a good fit.
-
-## Auth Model
-
-Optional shared API key, no user accounts, no database:
-
-- Backend: `API_KEY` env. When non-empty, `api_key_auth` middleware in `main.py` rejects every `path.startswith("/api/")` request without a matching `X-API-Key` header (constant-time compare, 401 generic message, key never logged). `/health`, `/static/*`, `/docs` stay open.
-- Frontend: `NEXT_PUBLIC_API_KEY` env. When set, `apiClient` sends `X-API-Key` on every axios call and `apiKeyHeaders()` covers raw `fetch()` call sites (protect/unlock pages).
-- Both unset = auth disabled (default for local dev).
-
-## Rate Limiting & Validation
-
-- Nginx: `limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s`, `burst=20 nodelay` on `location /api/`; `client_max_body_size 50M`; bad-bot and dotfile/PHP blocks.
-- Backend: `validation.py` — 50 MB default size cap, per-endpoint extension allowlists, 400 on violation. Download endpoint rejects path traversal (`..`, `/`, `\` → 400).
-
-## Monitoring
-
-- **Flower** (prod compose only): `flower` service, `celery -A app.celery_app.celery flower --port=5555 --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}`, port `5555:5555`.
-- **Healthchecks**: Redis (`redis-cli ping`), backend (`GET /health`), Celery worker (`celery inspect ping`) in both compose files.
-- **Logs**: both compose files use the default Docker log driver.
-- Celery config: `result_expires=86400`, `task_acks_late=True`, `worker_prefetch_multiplier=1`, `task_time_limit=1800`, `task_soft_time_limit=1500`.
-
-## Deploy Topology
-
-```
-Browser → Nginx:80 ─┬─ / ─────→ frontend:3000 (Next.js standalone)
-                     └─ /api/* ─→ backend:8000 (uvicorn, 2 workers)
-backend ⇄ redis:6379 (password via REDIS_PASSWORD, REDIS_URL=redis://:<pw>@redis:6379/0)
-celery_worker ⇄ redis ─→ backend/static/outputs → backend /api/v1/download/*
-flower:5555 (prod only, basic auth)
-```
-
-- Dev (`docker-compose.yml`): services `redis`, `celery_worker`. Backend runs on host for hot-reload.
-- Prod (`docker-compose.prod.yml`): services `redis`, `backend`, `celery_worker`, `flower`, `frontend`, `nginx` with `tmp_data`/`static_data` volumes and `depends_on` health conditions.
-
-## Local Development Setup
-
-### Prerequisites
-
-- Python 3.12+, Node.js 20+, Docker + Docker Compose.
-
-### 1. Start Infrastructure Services (Redis & Celery)
+Prerequisites: Python 3.12+, Node.js 20+. No Docker needed — both services run on the host.
 
 ```bash
-docker compose up -d
-# services: redis, celery_worker
-# verify: docker compose ps ; docker compose logs -f celery_worker
-```
-
-### 2. Set Up the Backend
-
-Backend runs on the host during dev:
-
-```bash
+# Backend (from backend/; venv lives at repo-root ../myenv)
 cd backend
-copy .env.template .env        # Windows (use `cp` on Linux/macOS)
-```
-
-Set in `backend/.env` (see `.env.template` for the full list):
-
-```env
-REDIS_URL=redis://:dev-redis-password@localhost:6379/0
-REDIS_PASSWORD=dev-redis-password
-CORS_ORIGINS=http://localhost:3000
-# API_KEY=                     # leave empty = auth disabled for dev
-```
-
-Then:
-
-```bash
-python -m venv venv
-venv\Scripts\activate
+../myenv/Scripts/activate        # Windows (use `source ../myenv/bin/activate` on Linux/macOS)
 pip install -r requirements.lock
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --port 8000
 ```
 
 API at `http://localhost:8000`, interactive docs at `http://localhost:8000/docs`, health at `http://localhost:8000/health`.
 
-### 3. Set Up the Frontend
-
 ```bash
-cd ../frontend
+# Frontend (new terminal, from repo root)
+cd frontend
 npm install
-copy .env.template .env.local
+npm run dev -- --webpack
 ```
 
-`frontend/.env.local`:
+Open `http://localhost:3000`. CORS on the backend defaults to `http://localhost:3000`, so localhost dev works out of the box.
 
-```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
-# NEXT_PUBLIC_API_KEY=          # must match backend API_KEY when backend auth is on
-# NEXT_PUBLIC_API_PREFIX=/api/v1
-```
-
-```bash
-npm run dev
-```
-
-Open `http://localhost:3000`.
-
-## Production Deployment
-
-### 1. Configure Environment (project root `.env`)
-
-```env
-REDIS_PASSWORD=change-me-in-production
-API_KEY=change-me-in-production
-FLOWER_USER=admin
-FLOWER_PASSWORD=change-me-in-production
-# CORS_ORIGINS=https://your-domain
-# DOCKERHUB_USERNAME=          # defaults to unknowndockerishere
-```
-
-### 2. Build and Launch
+## Self-host via Docker Compose
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml ps
 ```
 
-Nginx binds port `80`: `/` → frontend, `/api/*` → backend (rate-limited), `/static/*` served by backend.
+Stack: `backend` (uvicorn `--workers 2`), `frontend` (Next.js standalone), `nginx` (port 80: `/` → frontend, `/api/*` → backend, `/static/*` → backend). Images default to `${DOCKERHUB_USERNAME:-deepdocker2023}/yourpdf-backend:latest` and `.../yourpdf-frontend:latest`. Env names: `DOCKERHUB_USERNAME`, `API_KEY`, `CORS_ORIGINS`. See `docs/deploy.md` for the full reference.
 
-### 3. Operate
+## Production deployment (Cloud Run)
 
-```bash
-docker compose -f docker-compose.prod.yml logs -f backend
-docker compose -f docker-compose.prod.yml logs -f celery_worker
-docker compose -f docker-compose.prod.yml logs -f flower
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d --force-recreate
-```
+Live deployment is two Cloud Run services (`us-central1`), `yourpdf-frontend` and `yourpdf-backend`, using the single-`latest`-tag images above (no versioning). Full steps: `docs/deploy.md`.
 
-Flower UI: `http://<host>:5555` (FLOWER_USER/FLOWER_PASSWORD basic auth).
+## Auth model
+
+Optional shared API key, no user accounts, no database:
+
+- Backend: `API_KEY` env. When non-empty, `api_key_auth` middleware in `main.py` rejects every `path.startswith("/api/")` request without a matching `X-API-Key` header (constant-time compare, 401 generic message, key never logged). `/health`, `/static/*`, `/docs` stay open.
+- Frontend: `NEXT_PUBLIC_API_KEY` env (baked at build). When set, `apiClient` sends `X-API-Key` on axios calls and `apiKeyHeaders()` covers raw `fetch()` call sites.
+- Both unset = auth disabled (default for local dev).
+
+## Rate limiting & validation
+
+- Nginx: `limit_req_zone ... zone=api_limit:10m rate=10r/s`, `burst=20 nodelay` on `location /api/`; `client_max_body_size 50M`; bad-bot and dotfile/PHP blocks.
+- Backend: `validation.py` — 30 MB size cap, per-endpoint extension allowlists, 400 on violation. No download endpoint to guard (responses are direct).
+
+## Monitoring
+
+- **Healthcheck**: backend `GET /health` (compose healthcheck + load-balancer target).
+- **Logs**: default Docker log driver (`docker compose -f docker-compose.prod.yml logs -f backend`).
 
 ---
 
-## Running Tests
+## Running tests
 
-### Backend Tests
+### Backend tests
 
 ```bash
 cd backend   # with venv activated
 pytest
 ```
 
-### Frontend Tests
+### Frontend tests
 
 ```bash
 cd frontend
 npm run test
 ```
+
+## Fonts
+
+Typed signatures on the `/sign` page use three bundled open-source fonts in `frontend/public/fonts/`: Caveat and Great Vibes under the SIL Open Font License 1.1, and Homemade Apple under the Apache License 2.0.

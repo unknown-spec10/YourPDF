@@ -9,16 +9,23 @@ import ProgressBar from '@/components/ProgressBar'
 import { useFileJob } from '@/hooks/useFileJob'
 import { submitJob, buildSingleFileFormData } from '@/lib/api'
 
-type ConvertImageArgs = { file: File; target_format: ImageFormat }
+type ConvertImageArgs = { file: File; target_format: ImageFormat; render_width?: string }
 
-const convertImageSubmitter = ({ file, target_format }: ConvertImageArgs) =>
-  submitJob('/api/image/convert', buildSingleFileFormData(file, { target_format }))
+const convertImageSubmitter = ({ file, target_format, render_width }: ConvertImageArgs) =>
+  submitJob(
+    '/api/image/convert',
+    buildSingleFileFormData(
+      file,
+      render_width ? { target_format, render_width } : { target_format },
+    ),
+  )
 
-type ImageFormat = 'png' | 'jpg' | 'webp' | 'bmp' | 'tiff'
+type ImageFormat = 'png' | 'jpg' | 'webp' | 'bmp' | 'tiff' | 'svg'
 
 export default function ConvertImagePage() {
   const [file, setFile] = useState<File | null>(null)
   const [targetFormat, setTargetFormat] = useState<ImageFormat>('png')
+  const [renderWidth, setRenderWidth] = useState<string>('')
   const [imgSrc, setImgSrc] = useState<string | null>(null)
 
   const {
@@ -43,9 +50,16 @@ export default function ConvertImagePage() {
     }
   }, [file])
 
+  const isSvg = file?.name.toLowerCase().endsWith('.svg') ?? false
+
   const handleSubmit = async () => {
     if (!file) return
-    const ok = await submit({ file, target_format: targetFormat })
+    const trimmedWidth = renderWidth.trim()
+    const ok = await submit(
+      isSvg && trimmedWidth !== ''
+        ? { file, target_format: targetFormat, render_width: trimmedWidth }
+        : { file, target_format: targetFormat },
+    )
     if (!ok) {
       alert('Failed to initialize image conversion task. Please check server connection.')
     }
@@ -53,6 +67,7 @@ export default function ConvertImagePage() {
 
   const handleReset = () => {
     setFile(null)
+    setRenderWidth('')
     reset()
   }
 
@@ -62,6 +77,7 @@ export default function ConvertImagePage() {
     { value: 'webp', label: 'WEBP', desc: 'Modern web format. Exceptional compression and quality.' },
     { value: 'bmp', label: 'BMP', desc: 'Bitmap image format. Uncompressed raw graphic file.' },
     { value: 'tiff', label: 'TIFF', desc: 'Tagged Image File. High-quality format used in printing/graphics.' },
+    { value: 'svg', label: 'SVG', desc: 'Image embedded losslessly inside an SVG wrapper. Editable in vector design tools.' },
   ]
 
   const isWorkspace = file && !isDone && !isError && !isSubmitting
@@ -80,7 +96,7 @@ export default function ConvertImagePage() {
           </div>
           <div className="min-w-0">
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Convert Image</h1>
-            <p className="text-sm text-muted mt-0.5">Convert image formats to PNG, JPG, WEBP, BMP, or TIFF in one click.</p>
+            <p className="text-sm text-muted mt-0.5">Convert JPG, PNG, WEBP, BMP, TIFF, GIF, or SVG to PNG, JPG, WEBP, BMP, TIFF, or SVG in one click.</p>
           </div>
         </div>
       </div>
@@ -96,7 +112,7 @@ export default function ConvertImagePage() {
           >
             <DropZone
               onFileAccepted={setFile}
-              accept={{ 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.gif'] }}
+              accept={{ 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.gif', '.svg'] }}
               placeholderText="Drop your image file here to convert"
             />
             <p className="text-center text-xs text-muted">
@@ -129,7 +145,7 @@ export default function ConvertImagePage() {
                 <span className="hidden sm:inline">Replace</span>
                 <input
                   type="file"
-                  accept=".jpg,.jpeg,.png,.webp,.bmp,.tiff,.gif"
+                  accept=".jpg,.jpeg,.png,.webp,.bmp,.tiff,.gif,.svg"
                   className="hidden"
                   onChange={(e) => {
                     const next = e.target.files?.[0]
@@ -181,6 +197,26 @@ export default function ConvertImagePage() {
                   </div>
                 </div>
 
+                {isSvg && (
+                  <div className="flex flex-col gap-1.5 min-w-0">
+                    <label htmlFor="svg-render-width" className="text-[13px] font-semibold">Render width (px)</label>
+                    <input
+                      id="svg-render-width"
+                      type="number"
+                      placeholder="natural size"
+                      min={64}
+                      max={8000}
+                      step={1}
+                      value={renderWidth}
+                      onChange={(e) => setRenderWidth(e.target.value)}
+                      className="w-full h-11 px-3.5 rounded-lg border border-border bg-surface text-foreground placeholder-muted focus:outline-none focus:border-accent transition-colors text-sm"
+                    />
+                    <p className="text-xs text-muted leading-relaxed">
+                      SVG is vector — it renders at this width with aspect preserved. Leave empty for the original size.
+                    </p>
+                  </div>
+                )}
+
                 <div className="sticky bottom-3 lg:static z-10">
                   <button
                     onClick={handleSubmit}
@@ -193,7 +229,7 @@ export default function ConvertImagePage() {
               </div>
 
               {/* Preview — the one card */}
-              <div className="min-w-0 order-2 rounded-xl border border-card-border bg-surface shadow-sm overflow-hidden">
+              <div className="min-w-0 order-2 rounded-xl border border-card-border bg-surface shadow-sm overflow-hidden lg:sticky lg:top-24 self-start lg:max-h-[calc(100vh-8rem)]">
                 <div className="flex items-center justify-between gap-3 min-w-0 px-3.5 sm:px-4 py-3 border-b border-border">
                   <span className="text-[13px] font-semibold truncate">Source preview</span>
                   <span className="shrink-0 font-mono text-xs tabular-nums text-muted">

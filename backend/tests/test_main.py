@@ -322,7 +322,7 @@ def test_convert_image_roundtrip(client):
 
 def test_convert_image_bad_format(client):
     response = client.post(
-        "/api/image/convert", files=_image_file(), data={"target_format": "svg"}
+        "/api/image/convert", files=_image_file(), data={"target_format": "xyz"}
     )
     assert response.status_code == 400
 

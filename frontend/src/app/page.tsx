@@ -6,9 +6,10 @@ import {
   Grid,
   ArrowRight,
   ShieldCheck,
-  Cpu,
   Server,
   Sparkles,
+  Trash2,
+  FileCheck,
   Zap,
   Lock,
   EyeOff
@@ -82,7 +83,7 @@ export default function Home() {
           transition={{ duration: 0.5, delay: 0.14 }}
           className="mt-5 max-w-xl text-base leading-relaxed text-muted md:text-lg"
         >
-          No accounts. No trackers. Simple operations run locally in your browser. Heavy files delete from our servers in 60 seconds.
+          No accounts. No trackers. Files are processed on our servers and hard-deleted the moment your task finishes.
         </motion.p>
 
         <motion.div
@@ -160,21 +161,21 @@ export default function Home() {
             How privacy works
           </h2>
           <p className="mt-2 text-[15px] leading-relaxed text-muted">
-            Unlike commercial platforms that capture your documents, YourPDF handles processing in two secure, transparent modes depending on task weight.
+            Unlike commercial platforms that capture your documents, YourPDF processes every tool server-side in an isolated, ephemeral space — nothing is stored, and results come straight back to you.
           </p>
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 md:gap-5">
-          {/* Client-Side Flow */}
+          {/* Server-Side Flow: ephemeral processing */}
           <div className="flex flex-col rounded-xl border border-border bg-background p-6">
             <div>
               <div className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-success-subtle px-3 py-1 text-xs font-semibold text-success">
-                <Cpu className="h-3.5 w-3.5" />
-                <span>100% client-side processing</span>
+                <Server className="h-3.5 w-3.5" />
+                <span>Server-side ephemeral processing</span>
               </div>
-              <h3 className="text-[16px] font-semibold tracking-tight text-foreground">No upload required</h3>
+              <h3 className="text-[16px] font-semibold tracking-tight text-foreground">Every tool runs server-side</h3>
               <p className="mb-6 mt-2 text-sm leading-relaxed text-muted">
-                Merging, splitting, and text extraction run locally inside your browser tab using WebAssembly. Your files never touch a server.
+                Uploads are processed on our servers in an isolated temp space, and the finished file comes straight back in the same response — no queue, no polling.
               </p>
             </div>
 
@@ -185,8 +186,8 @@ export default function Home() {
               </div>
               <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
               <div className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-success-subtle px-2 py-2.5 text-success">
-                <Cpu className="h-4 w-4" />
-                <span>Browser</span>
+                <Server className="h-4 w-4" />
+                <span>Secure server</span>
               </div>
               <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
               <div className="w-full rounded-lg border border-border bg-surface-2 px-2 py-2.5">
@@ -195,36 +196,33 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Server-Side Flow */}
+          {/* Server-Side Flow: immediate deletion */}
           <div className="flex flex-col rounded-xl border border-border bg-background p-6">
             <div>
               <div className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-accent-subtle px-3 py-1 text-xs font-semibold text-accent">
-                <Server className="h-3.5 w-3.5" />
-                <span>Secure server-side processing</span>
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Deleted immediately, never stored</span>
               </div>
-              <h3 className="text-[16px] font-semibold tracking-tight text-foreground">Isolated executions</h3>
+              <h3 className="text-[16px] font-semibold tracking-tight text-foreground">Nothing kept after your task</h3>
               <p className="mb-6 mt-2 text-sm leading-relaxed text-muted">
-                Complex compression and rasterization run on sandboxed cloud workers. Uploaded files are deleted from the disk instantly, and download links expire in 15 minutes.
+                No database, no output folder, no download links to expire. Temp files are hard-deleted the moment your task finishes (best-effort on every request).
               </p>
             </div>
 
             {/* Diagram */}
             <div className="mt-auto flex flex-col items-stretch gap-2 rounded-xl border border-border bg-surface p-3 text-center text-xs font-medium sm:flex-row sm:items-center">
-              <div className="w-full rounded-lg border border-border bg-surface-2 px-1 py-2.5 sm:px-2">
-                <span>File</span>
+              <div className="w-full rounded-lg border border-border bg-surface-2 px-2 py-2.5">
+                <span>Process</span>
               </div>
               <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
-              <div className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-subtle px-1 py-2.5 text-accent sm:px-2">
-                <Server className="h-4 w-4" />
-                <span>Worker</span>
+              <div className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-danger-subtle px-2 py-2.5 text-danger">
+                <Trash2 className="h-4 w-4" />
+                <span>Immediate delete</span>
               </div>
               <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
-              <div className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-danger-subtle px-1 py-2.5 text-danger sm:px-2">
-                <span>Auto-delete</span>
-              </div>
-              <ArrowRight className="h-4 w-4 shrink-0 rotate-90 self-center text-muted sm:rotate-0" />
-              <div className="w-full rounded-lg border border-border bg-surface-2 px-1 py-2.5 sm:px-2">
-                <span>Result</span>
+              <div className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-2 px-2 py-2.5">
+                <FileCheck className="h-4 w-4" />
+                <span>Nothing left</span>
               </div>
             </div>
           </div>

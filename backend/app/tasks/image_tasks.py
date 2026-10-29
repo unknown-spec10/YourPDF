@@ -1,10 +1,13 @@
 """Synchronous image processing functions (in-request, no queue)."""
 
+import io
+import base64
 import logging
 import os
 import sys
 import uuid
 
+from fastapi import HTTPException
 from PIL import Image, ImageDraw, ImageFont
 
 from app.tasks.common import cleanup_paths, read_bytes, resolve_path
@@ -167,7 +170,7 @@ def crop_image_task(
 
 
 def convert_image_task(
-    file_path: str, target_format: str, original_filename: str = None
+    file_path: str, target_format: str, original_filename: str = None, render_width: int | None = None
 ) -> tuple[bytes, str]:
     """Convert an image to the target format and return the bytes."""
     logger.info(f"Starting image conversion task for {file_path} to format {target_format}")
@@ -177,28 +180,84 @@ def convert_image_task(
         raise FileNotFoundError(f"Input file not found: {file_path}")
 
     target_format = target_format.lower()
-    valid_formats = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp", "bmp": "bmp", "tiff": "tiff"}
+    valid_formats = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp", "bmp": "bmp", "tiff": "tiff", "svg": "svg"}
 
     if target_format not in valid_formats:
         raise ValueError(f"Unsupported target format: {target_format}")
 
-    pillow_format = valid_formats[target_format]
     out_ext = f".{target_format}"
     if out_ext == ".jpeg":
         out_ext = ".jpg"
+
+    input_ext = os.path.splitext(file_path)[1].lower()
+
+    # SVG target: pass-through for SVG inputs, PNG-in-SVG wrapper otherwise.
+    if target_format == "svg":
+        try:
+            if input_ext == ".svg":
+                data = read_bytes(file_path)
+            else:
+                with Image.open(file_path) as img:
+                    if img.mode in ("RGBA", "LA", "PA"):
+                        img = img.convert("RGBA")
+                    elif img.mode == "P":
+                        img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+                    elif img.mode != "RGB":
+                        img = img.convert("RGB")
+                    w, h = img.size
+                    buf = io.BytesIO()
+                    img.save(buf, "PNG")
+                    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                    svg_text = (
+                        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+                        f'viewBox="0 0 {w} {h}">'
+                        f'<image width="{w}" height="{h}" href="data:image/png;base64,{b64}"/>'
+                        f"</svg>"
+                    )
+                    data = svg_text.encode("utf-8")
+            download_name = _download_name(
+                original_filename, f"converted_{uuid.uuid4()}{out_ext}", lambda base, e: f"{base}{out_ext}"
+            )
+            return data, download_name
+        except Exception as e:
+            logger.error(f"Image conversion failed: {e}")
+            raise e
+        finally:
+            cleanup_paths(file_path)
+
+    pillow_format = valid_formats[target_format]
 
     output_filename = f"converted_{uuid.uuid4()}{out_ext}"
     output_dir = os.path.dirname(file_path)
     output_path = os.path.join(output_dir, output_filename)
 
     try:
-        with Image.open(file_path) as img:
-            if pillow_format == "jpeg" and img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-            elif img.mode == "P" and pillow_format not in ("png", "gif"):
-                img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+        if input_ext == ".svg":
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                svg_text = f.read()
+            try:
+                import resvg_py
 
-            img.save(output_path, pillow_format.upper())
+                png_bytes = resvg_py.svg_to_bytes(svg_string=svg_text, width=render_width or None)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=400, detail="SVG could not be rendered. Check that the file is a valid SVG.")
+            with Image.open(io.BytesIO(png_bytes)) as img:
+                if pillow_format == "jpeg" and img.mode in ("RGBA", "LA"):
+                    img = img.convert("RGB")
+                elif img.mode == "P" and pillow_format not in ("png", "gif"):
+                    img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+
+                img.save(output_path, pillow_format.upper())
+        else:
+            with Image.open(file_path) as img:
+                if pillow_format == "jpeg" and img.mode in ("RGBA", "LA"):
+                    img = img.convert("RGB")
+                elif img.mode == "P" and pillow_format not in ("png", "gif"):
+                    img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+
+                img.save(output_path, pillow_format.upper())
 
         data = read_bytes(output_path)
         download_name = _download_name(

@@ -25,7 +25,8 @@ import {
   Maximize,
   RefreshCw,
   Presentation,
-  Search
+  Search,
+  PenLine
 } from 'lucide-react'
 
 interface Tool {
@@ -146,6 +147,13 @@ export default function ToolsPage() {
       description: 'Convert scanned PDF documents into searchable text PDFs.',
       href: '/ocr',
       icon: Eye,
+      type: 'server',
+    },
+    {
+      name: 'Sign PDF',
+      description: 'Draw, type, or upload a signature and stamp it onto your PDF.',
+      href: '/sign',
+      icon: PenLine,
       type: 'server',
     },
   ]

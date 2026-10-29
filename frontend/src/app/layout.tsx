@@ -5,8 +5,8 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
-  title: "YourPDF — Free, Private, No-Upload PDF Tools",
-  description: "A production-grade, privacy-first, open-source PDF processing platform. Simple operations run client-side. Heavy operations run server-side in secure temporary environments.",
+  title: "YourPDF — Free & Private PDF, Image and Office Tools",
+  description: "A production-grade, privacy-first, open-source PDF processing platform. All processing runs server-side, and files are hard-deleted immediately after processing.",
 };
 
 export default function RootLayout({

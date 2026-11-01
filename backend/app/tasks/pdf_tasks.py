@@ -40,6 +40,14 @@ from app.tasks.common import (
 logger = logging.getLogger(__name__)
 
 
+def _ocrmypdf_argv() -> list[str]:
+    """Where to find ocrmypdf. Frozen desktop builds have no console script on PATH, so run
+    the bundled module through the interpreter that hosts this process."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "-m", "ocrmypdf"]
+    return ["ocrmypdf"]
+
+
 def _download_name(original_filename: str | None, fallback: str, build) -> str:
     if original_filename:
         base, ext = os.path.splitext(original_filename)
@@ -1374,7 +1382,7 @@ def ocr_pdf_task(file_path: str, language: str = "eng", original_filename: str =
     output_path = os.path.join(output_dir, output_filename)
 
     try:
-        cmd = ["ocrmypdf", "--skip-text", "-l", language, file_path, output_path]
+        cmd = [*_ocrmypdf_argv(), "--skip-text", "-l", language, file_path, output_path]
         logger.info(f"Running OCR command: {' '.join(cmd)}")
         subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=SUBPROCESS_TIMEOUT)
 

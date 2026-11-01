@@ -1,0 +1,275 @@
+"""Desktop sidecar: the real FastAPI app + static export, same origin, token-gated.
+
+Additive by design — nothing in backend/ is modified. Dev run:
+
+    YOURPDF_TOKEN=dev ..\\..\\myenv\\Scripts\\python.exe serve.py
+
+Prints `YOURPDF_PORT <port>` on stdout once ready — the handshake the Electron shell reads
+before loading the UI (no hardcoded port, no race).
+"""
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent.parent  # D:\Projects\pdf-toolkit
+BACKEND = REPO / "backend"
+
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from app.main import app  # noqa: E402
+
+TOKEN = os.environ.get("YOURPDF_TOKEN") or secrets.token_urlsafe(24)
+OUT_DIR = Path(os.environ.get("YOURPDF_OUT") or (REPO / "frontend" / "out"))
+
+OPEN_PATHS = ("/health", "/healthz", "/api/v1/capabilities")
+OPEN_PREFIXES = ("/_next/", "/fonts/", "/favicon", "/icons/")
+
+WINDOWS = os.name == "nt"
+CREATE_NO_WINDOW = 0x08000000 if WINDOWS else 0
+DEFAULT_TIMEOUT = int(os.environ.get("YOURPDF_TIMEOUT", "120"))
+LONG_TIMEOUT = int(os.environ.get("YOURPDF_LONG_TIMEOUT", "300"))
+LONG_PATHS = ("/ocr", "/docx-to-pdf", "/pptx-to-pdf", "/merge-docx", "/merge-pptx", "/pdf-to-docx")
+
+
+def _is_static(path: str, method: str) -> bool:
+    if method in ("GET", "HEAD") and not path.startswith("/api/"):
+        return True
+    return path.startswith(OPEN_PREFIXES) or path in OPEN_PATHS
+
+
+def _run(cmd: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+
+
+def child_pids() -> list[int]:
+    """Every subprocess the backend shelled out to (gs, tesseract, soffice, ocrmypdf…).
+
+    conhost.exe is deliberately excluded: the sidecar's console host is a direct
+    child, and killing it leaves the sidecar unable to start any later console
+    program — tesseract/gs then exit at DLL init with 0xC0000142, so a single
+    Cancel poisons every subsequent job until the app is restarted.
+    """
+    if not WINDOWS:
+        out = _run(["pgrep", "-P", str(os.getpid())])
+        return [int(x) for x in out.stdout.split() if x.isdigit()]
+    out = _run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"Get-CimInstance Win32_Process -Filter 'ParentProcessId={os.getpid()}' | "
+            'ForEach-Object { "$($_.ProcessId) $($_.Name)" }',
+        ]
+    )
+    pids: list[int] = []
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].lower() != "conhost.exe":
+            pids.append(int(parts[0]))
+    return pids
+
+
+def kill_task_children() -> int:
+    """Aborting a request only drops the HTTP response; the work keeps burning CPU.
+    Killing the tree is what actually cancels a merge/OCR."""
+    killed = 0
+    for pid in child_pids():
+        _run(["taskkill", "/PID", str(pid), "/T", "/F"])
+        killed += 1
+    return killed
+
+
+class ActiveRequests:
+    """Tracks in-flight /api calls so a watchdog can free the single-port server."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: dict[str, float] = {}
+
+    def start(self, key: str) -> None:
+        with self._lock:
+            self._active[key] = time.monotonic()
+
+    def finish(self, key: str) -> None:
+        with self._lock:
+            self._active.pop(key, None)
+
+    def expired(self) -> list[str]:
+        now = time.monotonic()
+        with self._lock:
+            return [k for k, t in self._active.items() if now - t > self._timeout_for(k)]
+
+    @staticmethod
+    def _timeout_for(key: str) -> int:
+        return LONG_TIMEOUT if any(p in key for p in LONG_PATHS) else DEFAULT_TIMEOUT
+
+
+ACTIVE = ActiveRequests()
+
+
+def watchdog() -> None:
+    while True:
+        time.sleep(5)
+        stale = ACTIVE.expired()
+        if stale:
+            n = kill_task_children()
+            print(f"YOURPDF_TIMEOUT killed {n} child process(es) for {len(stale)} stale request(s)", flush=True)
+            for key in stale:
+                ACTIVE.finish(key)
+
+
+class LoopbackTokenMiddleware:
+    """Loopback is not a trust boundary: any local process, or any web page in the user's
+    browser, can POST here (a plain form post ignores CORS). Require the per-launch token.
+
+    Pure ASGI (never BaseHTTPMiddleware): wrapping the request body stream deadlocks multipart
+    uploads.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path", "")
+        method = scope.get("method", "GET")
+        if _is_static(path, method):
+            return await self.app(scope, receive, send)
+
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        supplied = headers.get("x-yourpdf-token", "")
+        if not supplied:
+            for part in scope.get("query_string", b"").decode("latin-1").split("&"):
+                if part.startswith("t="):
+                    supplied = part[2:]
+                    break
+        if not supplied or not secrets.compare_digest(supplied, TOKEN):
+            body = b'{"detail":"unauthorized"}'
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())],
+                }
+            )
+            await send({"type": "http.response.body", "body": body})
+            return
+
+        key = f"{method} {path}"
+        ACTIVE.start(key)
+        try:
+            return await self.app(scope, receive, send)
+        finally:
+            ACTIVE.finish(key)
+
+
+def add_desktop_routes() -> None:
+    from fastapi.responses import JSONResponse
+
+    @app.get("/api/v1/capabilities")
+    def capabilities():
+        def resolve(name: str, extra: tuple[str, ...] = ()) -> str | None:
+            for cand in (shutil.which(name), *extra):
+                if cand and os.path.exists(cand):
+                    return cand
+            return None
+
+        soffice_paths = (
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        )
+        gs = resolve("gswin64c") or resolve("gs")
+        tess = resolve("tesseract")
+        poppler = resolve("pdftoppm")
+        return JSONResponse(
+            {
+                "libreoffice": bool(resolve("soffice", soffice_paths)),
+                "ocr": bool(tess and gs),
+                "gs": bool(gs),
+                "poppler": bool(poppler),
+                # Paths make it obvious whether the bundled copies are the ones in use.
+                "paths": {"gs": gs, "tesseract": tess, "poppler": poppler},
+            }
+        )
+
+    @app.post("/api/v1/cancel")
+    def cancel():
+        killed = kill_task_children()
+        print(f"YOURPDF_CANCEL killed {killed} child process(es)", flush=True)
+        return JSONResponse({"killed": killed})
+
+
+def prune_tmp() -> None:
+    tmp = Path(os.environ.get("YOURPDF_TMP") or (BACKEND / "tmp"))
+    if not tmp.is_dir():
+        return
+    for pattern in ("upload_*", "output_*"):
+        for path in tmp.glob(pattern):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def main() -> None:
+    # Frozen desktop builds have no `ocrmypdf` console script on PATH, so the backend calls
+    # `<this exe> -m ocrmypdf …`. Dispatch that argv straight into the bundled CLI.
+    if "-m" in sys.argv and "ocrmypdf" in sys.argv:
+        module_args = sys.argv[sys.argv.index("ocrmypdf") + 1 :]
+        sys.argv = ["ocrmypdf", *module_args]
+        from ocrmypdf.__main__ import run as ocrmypdf_run
+
+        ocrmypdf_run()
+        return
+
+    if not OUT_DIR.is_dir():
+        print(f"YOURPDF_ERROR missing frontend export at {OUT_DIR}", flush=True)
+        raise SystemExit(1)
+
+    prune_tmp()
+    add_desktop_routes()
+    app.add_middleware(LoopbackTokenMiddleware)
+    app.mount("/", StaticFiles(directory=str(OUT_DIR), html=True), name="desktop-static")
+
+    threading.Thread(target=watchdog, daemon=True).start()
+
+    import socket
+    import urllib.request
+
+    import uvicorn
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+
+    def announce() -> None:
+        # Report the port only once the socket actually accepts — the shell loads the URL
+        # immediately and a premature print is a guaranteed ERR_CONNECTION_REFUSED.
+        for _ in range(600):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5)
+                break
+            except Exception:
+                time.sleep(0.1)
+        print(f"YOURPDF_PORT {port}", flush=True)
+
+    threading.Thread(target=announce, daemon=True).start()
+    server.run()
+
+
+if __name__ == "__main__":
+    main()

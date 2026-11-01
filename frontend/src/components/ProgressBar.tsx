@@ -1,6 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
+import { cancelActiveJob } from '@/lib/api'
 
 interface ProgressBarProps {
   progress: number // 0 to 100
@@ -25,11 +26,18 @@ export default function ProgressBar({ progress, message }: ProgressBarProps) {
       </div>
 
       {/* Progress Metadata */}
-      <div className="flex items-center justify-between text-[13px]">
-        <span className="animate-pulse-soft font-medium text-muted">{message}</span>
-        <span className="font-mono font-semibold tabular-nums text-foreground">
+      <div className="flex items-center justify-between gap-3 text-[13px]">
+        <span className="animate-pulse-soft min-w-0 flex-1 font-medium text-muted">{message}</span>
+        <span className="shrink-0 font-mono font-semibold tabular-nums text-foreground">
           {clampedProgress}%
         </span>
+        <button
+          type="button"
+          onClick={() => void cancelActiveJob()}
+          className="shrink-0 cursor-pointer rounded-lg px-2.5 py-1 text-xs font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-foreground"
+        >
+          Cancel
+        </button>
       </div>
     </div>
   )

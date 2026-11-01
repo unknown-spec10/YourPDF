@@ -1,0 +1,58 @@
+{
+  "name": "yourpdf-desktop",
+  "productName": "YourPDF Desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "YourPDF Desktop — local PDF toolkit. Files never leave this machine.",
+  "main": "shell/main.js",
+  "author": {
+    "name": "Deep Podder",
+    "email": "conect.deeppodder@gmail.com"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "start:debug": "electron . --remote-debugging-port=9224",
+    "build:frontend": "npm --prefix ../frontend run build",
+    "build:sidecar": "node scripts/build-sidecar.mjs",
+    "vendor": "node scripts/vendor-binaries.mjs",
+    "pack": "electron-builder --win nsis",
+    "pack:dir": "electron-builder --win dir"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.yourpdf.desktop",
+    "productName": "YourPDF Desktop",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "shell/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../frontend/out", "to": "frontend" },
+      { "from": "build/sidecar/yourpdf-backend", "to": "sidecar" },
+      { "from": "bin", "to": "bin" },
+      { "from": "licenses", "to": "licenses" }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "assets/icon.ico",
+      "artifactName": "YourPDF-Desktop-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true,
+      "shortcutName": "YourPDF Desktop",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

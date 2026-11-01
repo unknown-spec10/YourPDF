@@ -110,6 +110,18 @@ export function useFileJob<TArgs>(
         onDoneRef.current?.({ downloadUrl: url, fileName: name })
         return true
       } catch (err) {
+        // Cancel is not a failure: drop back to the tool workspace with the
+        // input still loaded, and say nothing (pages alert on `false`).
+        if ((err as { name?: string } | null)?.name === 'AbortError') {
+          revokeUrl()
+          setDownloadUrl(null)
+          setFileName(null)
+          setData(null)
+          setSubmitError(null)
+          setIsDone(false)
+          setIsError(false)
+          return true
+        }
         setSubmitError(err instanceof Error ? err.message : 'Request failed.')
         setIsError(true)
         return false

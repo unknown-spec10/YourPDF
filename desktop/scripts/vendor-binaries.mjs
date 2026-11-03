@@ -45,11 +45,11 @@ for (const src of SOURCES) {
 // Tesseract needs the language data it will actually be asked for.
 const tessdata = path.join(binDir, "tesseract", "tessdata");
 if (fs.existsSync(tessdata)) {
-  const keep = new Set(["eng.traineddata", "osd.traineddata", "pdf.ttf", "configs", "tessconfigs"]);
+  const keep = new Set(["eng.traineddata", "pdf.ttf", "configs", "tessconfigs"]);
   for (const entry of fs.readdirSync(tessdata)) {
     if (!keep.has(entry)) fs.rmSync(path.join(tessdata, entry), { recursive: true, force: true });
   }
-  console.log(`[vendor] tessdata trimmed to eng + osd (${(du(tessdata) / 1e6).toFixed(1)} MB)`);
+  console.log(`[vendor] tessdata trimmed to eng (${(du(tessdata) / 1e6).toFixed(1)} MB)`);
 }
 
 console.log(`[vendor] total bundled binaries: ${(total / 1e6).toFixed(1)} MB`);

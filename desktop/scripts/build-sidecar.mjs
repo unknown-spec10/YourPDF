@@ -36,6 +36,14 @@ const args = [
   "ocrmypdf",
   "--copy-metadata",
   "pikepdf",
+  // ocrmypdf pulls in cv2/numpy as transitive deps, but pdf2docx (imported at startup by
+  // app/tasks/pdf_tasks.py) imports cv2, numpy and fitz at module load — those must stay.
+  // Only Tcl/Tk (pdf2docx's optional GUI, never imported) is dead weight here.
+  "--exclude-module", "tkinter",
+  "--exclude-module", "_tkinter",
+  "--exclude-module", "Tkinter",
+  "--exclude-module", "tcl",
+  "--exclude-module", "tk",
   "--distpath",
   out,
   "--workpath",

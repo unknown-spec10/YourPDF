@@ -181,6 +181,19 @@ that file's `.blockmap`, and `latest.yml` (which names the versioned file and it
 sha512). `npm run release:assets` refuses to finish if `latest.yml` or the
 blockmap is missing, and the workflow's verify step checks the same list.
 
+The installer is a **one-click** per-user NSIS build (`nsis.oneClick: true` in
+`desktop/package.json`): double-clicking it installs to
+`%LOCALAPPDATA%\Programs\YourPDF Desktop` and launches the app — no wizard, no
+UAC, no choices. Keep it that way: the download page and `INSTALL.txt` promise
+"double-click, done", and a one-click build is also the only shape whose UI
+matches that promise. (`install.ps1` and electron-updater both run it with `/S`,
+which works with either type — the difference is only what a human sees.)
+
+CI gotcha: `pdf2image` shells out to `pdfinfo`/`pdftoppm`, so Poppler has to be
+on `PATH` **before** the "Run backend tests" step. Vendoring it after the tests
+leaves three `test_sign.py` cases failing as `assert 500 == 200`, and because
+the tests gate the build, no release is ever published.
+
 ## 7. Code signing (opt-in)
 
 v1 ships **unsigned**: Windows SmartScreen warns on first launch, and reputation

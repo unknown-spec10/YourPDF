@@ -94,10 +94,13 @@ jobs:
             throw "Tag $env:GITHUB_REF_NAME does not match desktop/package.json version $version"
           }
 
-      - name: Install Node dependencies
-        run: |
-          npm ci --prefix frontend
-          npm ci --prefix desktop
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
 
       - name: Build release bundle
         working-directory: desktop

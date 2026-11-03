@@ -1,7 +1,8 @@
 // YourPDF Desktop — Electron main process.
 // Owns: window, sidecar lifecycle (spawn → port handshake → tree kill), the save channel,
 // logs, and the menu. Nothing here touches the web deployment.
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, Notification, dialog, ipcMain, session, shell } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -14,6 +15,44 @@ const RES_ROOT = IS_DEV ? path.join(__dirname, "..", "..") : process.resourcesPa
 const DEV_ROOT = path.join(__dirname, "..");
 const LOG_DIR = path.join(app.getPath("userData"), "logs");
 const TMP_DIR = path.join(app.getPath("userData"), "tmp");
+const CONFIG_FILE = path.join(app.getPath("userData"), "config.json");
+const HISTORY_FILE = path.join(app.getPath("userData"), "downloads.json");
+
+// ---------------------------------------------------------------- config + download history
+function readJson(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(file, data) {
+  try {
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  } catch (e) {
+    log(`config write failed: ${e.message}`);
+  }
+}
+
+function downloadDir() {
+  const configured = readJson(CONFIG_FILE, {}).downloadDir;
+  return configured || app.getPath("downloads");
+}
+
+function readHistory() {
+  const items = readJson(HISTORY_FILE, []);
+  return Array.isArray(items) ? items : [];
+}
+
+function addHistory(entry) {
+  const items = [entry, ...readHistory().filter((i) => i.path !== entry.path)].slice(0, 200);
+  writeJson(HISTORY_FILE, items);
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send("yourpdf:saved", entry);
+  }
+  return items;
+}
 
 let win = null;
 let sidecar = null;
@@ -34,14 +73,129 @@ const log = (...parts) => {
 };
 
 // ---------------------------------------------------------------- save channel
-ipcMain.handle("save-blob", async (_ev, { bytes, hint }) => {
-  const dirty = String(hint || "yourpdf-output.pdf").replace(/[\\/:*?"<>|]+/g, "_").trim();
-  const name = /\.[a-z0-9]{2,5}$/i.test(dirty) ? dirty : `${dirty || "yourpdf-output"}.pdf`;
-  const target = path.join(app.getPath("downloads"), name);
+ipcMain.handle("save-blob", async (_ev, { bytes, hint, ext }) => {
+  const dir = downloadDir();
+
+  // The link text is a label ("Download Word File"), not a filename: drop the leading verb and
+  // any extension it guessed, then append the extension implied by the response MIME type.
+  let base = String(hint || "")
+    .replace(/^download\s+/i, "")
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .trim();
+  base = base
+    .replace(/\.(pdf|docx|pptx|xlsx|zip|png|jpe?g|webp|svg|gif|bmp|tiff|txt|csv|json)$/i, "")
+    .trim();
+  if (!base) base = "yourpdf-output";
+
+  const extension = ext && /^\.[a-z0-9]{2,5}$/i.test(ext) ? ext.toLowerCase() : ".pdf";
+  let target = path.join(dir, `${base}${extension}`);
+  for (let n = 2; fs.existsSync(target) && n < 100; n += 1) {
+    target = path.join(dir, `${base} (${n})${extension}`);
+  }
+
   fs.writeFileSync(target, Buffer.from(bytes));
   const size = fs.statSync(target).size;
   log(`saved ${target} (${size} bytes)`);
-  return { path: target, size };
+
+  const entry = {
+    name: path.basename(target),
+    path: target,
+    dir,
+    size,
+    at: new Date().toISOString(),
+  };
+  // History + broadcast: the page renders a toast with Open / Show in folder / All downloads,
+  // and the Downloads window refreshes from the same event.
+  addHistory(entry);
+
+  if (Notification.isSupported()) {
+    const note = new Notification({ title: "Saved to Downloads", body: entry.name });
+    note.on("click", () => shell.showItemInFolder(target));
+    note.show();
+  }
+  return { path: target, size, name: entry.name, dir };
+});
+
+// ---------------------------------------------------------------- downloads window
+let downloadsWin = null;
+
+function showDownloads() {
+  if (downloadsWin && !downloadsWin.isDestroyed()) {
+    downloadsWin.show();
+    downloadsWin.focus();
+    return downloadsWin;
+  }
+  downloadsWin = new BrowserWindow({
+    width: 800,
+    height: 580,
+    minWidth: 620,
+    minHeight: 420,
+    title: `Downloads — ${APP_NAME}`,
+    backgroundColor: "#0b0b0f",
+    parent: win || undefined,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, "preload.js"),
+    },
+  });
+  downloadsWin.loadFile(path.join(__dirname, "downloads.html"));
+  downloadsWin.on("closed", () => {
+    downloadsWin = null;
+  });
+  return downloadsWin;
+}
+
+ipcMain.handle("downloads:showWindow", () => {
+  showDownloads();
+  return true;
+});
+
+ipcMain.handle("downloads:list", () =>
+  readHistory().map((entry) => ({ ...entry, exists: fs.existsSync(entry.path) }))
+);
+
+ipcMain.handle("downloads:open", async (_ev, target) => {
+  if (!target || !fs.existsSync(target)) return { ok: false, error: "This file has been moved or deleted." };
+  const problem = await shell.openPath(target);
+  if (problem) log(`open failed for ${target}: ${problem}`);
+  return { ok: !problem, error: problem || null };
+});
+
+ipcMain.handle("downloads:reveal", (_ev, target) => {
+  if (target && fs.existsSync(target)) {
+    shell.showItemInFolder(target);
+    return { ok: true };
+  }
+  shell.openPath(downloadDir());
+  return { ok: false, error: "File is gone; opened the downloads folder instead." };
+});
+
+ipcMain.handle("downloads:remove", (_ev, target) => {
+  writeJson(HISTORY_FILE, readHistory().filter((entry) => entry.path !== target));
+  return { ok: true };
+});
+
+ipcMain.handle("downloads:clear", () => {
+  writeJson(HISTORY_FILE, []);
+  return { ok: true };
+});
+
+ipcMain.handle("downloads:dir", () => downloadDir());
+
+ipcMain.handle("downloads:chooseDir", async () => {
+  const result = await dialog.showOpenDialog(win || undefined, {
+    title: "Where should downloads be saved?",
+    defaultPath: downloadDir(),
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths?.length) return { ok: false, dir: downloadDir() };
+  const config = readJson(CONFIG_FILE, {});
+  config.downloadDir = result.filePaths[0];
+  writeJson(CONFIG_FILE, config);
+  log(`download dir → ${config.downloadDir}`);
+  return { ok: true, dir: config.downloadDir };
 });
 
 ipcMain.handle("app:version", () => app.getVersion());
@@ -143,6 +297,96 @@ function stopSidecar() {
   sidecar = null;
 }
 
+// ---------------------------------------------------------------- auto-update
+// electron-updater reads latest.yml from the GitHub release named by `build.publish` in
+// package.json. Unsigned builds still update (the installer is re-run silently); signing only
+// affects the SmartScreen prompt, not the update mechanism.
+const UPDATES_ENABLED = app.isPackaged && process.env.YOURPDF_NO_UPDATE !== "1";
+
+function setupAutoUpdater() {
+  if (!UPDATES_ENABLED) {
+    log("updates: disabled (dev build or YOURPDF_NO_UPDATE=1)");
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = {
+    info: (m) => log(`[update] ${m}`),
+    warn: (m) => log(`[update:warn] ${m}`),
+    error: (m) => log(`[update:error] ${m}`),
+    debug: (m) => log(`[update:debug] ${m}`),
+  };
+
+  autoUpdater.on("checking-for-update", () => log("update: checking"));
+  autoUpdater.on("update-not-available", (i) => log(`update: up to date (${i?.version})`));
+  autoUpdater.on("update-available", (i) => {
+    log(`update: ${i?.version} available, downloading`);
+    if (win && !win.isDestroyed()) {
+      dialog
+        .showMessageBox(win, {
+          type: "info",
+          title: "Update available",
+          message: `YourPDF Desktop ${i?.version} is downloading in the background.`,
+          detail: "You can keep working. You'll be asked to restart when it's ready.",
+          buttons: ["OK"],
+        })
+        .catch(() => {});
+    }
+  });
+  autoUpdater.on("error", (e) => log(`update: failed — ${e?.message || e}`));
+  autoUpdater.on("update-downloaded", async (i) => {
+    log(`update: ${i?.version} downloaded`);
+    if (!win || win.isDestroyed()) return;
+    const { response } = await dialog.showMessageBox(win, {
+      type: "info",
+      title: "Update ready",
+      message: `YourPDF Desktop ${i?.version} is ready to install.`,
+      detail: "Restart now to apply it. Your files are untouched.",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) {
+      stopSidecar();
+      autoUpdater.quitAndInstall(false, true);
+    }
+  });
+
+  // Check a few seconds after launch so startup never waits on the network.
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((e) => log(`update: check failed — ${e?.message || e}`));
+  }, 8000);
+}
+
+async function checkForUpdatesManually() {
+  if (!UPDATES_ENABLED) {
+    await dialog.showMessageBox({
+      type: "info",
+      title: "Updates",
+      message: "Updates are only checked in the installed app.",
+      detail: `This build runs from ${process.execPath}.`,
+    });
+    return;
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    if (!result?.updateInfo) throw new Error("no update metadata");
+    const latest = result.updateInfo.version;
+    if (latest === app.getVersion()) {
+      await dialog.showMessageBox({ type: "info", title: "Updates", message: `You're up to date (${latest}).` });
+    }
+  } catch (e) {
+    log(`update: manual check failed — ${e?.message || e}`);
+    await dialog.showMessageBox({
+      type: "warning",
+      title: "Updates",
+      message: "Couldn't check for updates.",
+      detail: `${e?.message || e}\n\nCheck your connection, then try again. Logs: ${LOG_DIR}`,
+    });
+  }
+}
+
 // ---------------------------------------------------------------- window
 function createWindow(port) {
   win = new BrowserWindow({
@@ -188,7 +432,8 @@ function createWindow(port) {
           accelerator: "CmdOrCtrl+O",
           click: () => dialog.showOpenDialog({ properties: ["openFile"] }),
         },
-        { label: "Open Output Folder", click: () => shell.openPath(app.getPath("downloads")) },
+        { label: "Downloads…", accelerator: "CmdOrCtrl+J", click: () => showDownloads() },
+        { label: "Open Downloads Folder", click: () => shell.openPath(downloadDir()) },
         { type: "separator" },
         { role: "quit" },
       ],
@@ -200,6 +445,8 @@ function createWindow(port) {
     {
       label: "Help",
       submenu: [
+        { label: "Check for Updates…", click: () => checkForUpdatesManually() },
+        { type: "separator" },
         {
           label: `About ${APP_NAME}`,
           click: () =>
@@ -252,6 +499,7 @@ if (!app.requestSingleInstanceLock()) {
       const port = await startSidecar();
       log(`sidecar ready on ${port}`);
       createWindow(port);
+      setupAutoUpdater();
     } catch (e) {
       log(`startup failed: ${e.message}`);
       dialog.showErrorBox("YourPDF could not start", `${e.message}\n\nLogs: ${LOG_DIR}`);

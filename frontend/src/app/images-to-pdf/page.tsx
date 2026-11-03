@@ -26,6 +26,7 @@ export default function ImagesToPdfPage() {
     submit,
     reset,
     downloadUrl,
+    fileName,
   } = useFileJob<File[]>(imagesToPdfSubmitter)
 
   // Real image thumbnails from object URLs (preview only, submit path unchanged)
@@ -316,6 +317,7 @@ export default function ImagesToPdfPage() {
                 <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mt-2 w-full max-w-full justify-center items-stretch sm:items-center">
                   <a
                     href={downloadUrl ?? ''}
+                    download={fileName ?? undefined}
                     className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-accent px-6 text-sm font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                   >
                     <Download className="h-4 w-4" />

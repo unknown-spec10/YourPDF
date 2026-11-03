@@ -12,7 +12,7 @@ def get_backend_root() -> str:
 
 
 def get_tmp_dir() -> str:
-    tmp_dir = os.path.join(get_backend_root(), "tmp")
+    tmp_dir = os.environ.get("YOURPDF_TMP") or os.path.join(get_backend_root(), "tmp")
     os.makedirs(tmp_dir, exist_ok=True)
     return tmp_dir
 

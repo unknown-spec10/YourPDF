@@ -8,6 +8,7 @@ Prints `YOURPDF_PORT <port>` on stdout once ready — the handshake the Electron
 before loading the UI (no hardcoded port, no race).
 """
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -60,6 +61,10 @@ def child_pids() -> list[int]:
     if not WINDOWS:
         out = _run(["pgrep", "-P", str(os.getpid())])
         return [int(x) for x in out.stdout.split() if x.isdigit()]
+    try:
+        return _child_pids_ctypes()
+    except Exception:
+        pass
     out = _run(
         [
             "powershell",
@@ -74,6 +79,48 @@ def child_pids() -> list[int]:
         parts = line.split()
         if len(parts) >= 2 and parts[0].isdigit() and parts[1].lower() != "conhost.exe":
             pids.append(int(parts[0]))
+    return pids
+
+
+def _child_pids_ctypes() -> list[int]:
+    """Toolhelp32 snapshot: ~1ms, versus ~2s for spawning PowerShell on every Cancel."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_char * 260),
+        ]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    snap = k32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if snap == -1:
+        raise OSError("CreateToolhelp32Snapshot failed")
+
+    entry = PROCESSENTRY32()
+    entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+    me = os.getpid()
+    pids: list[int] = []
+    try:
+        if not k32.Process32First(snap, ctypes.byref(entry)):
+            raise OSError("Process32First failed")
+        while True:
+            name = entry.szExeFile.decode("mbcs", "ignore").lower()
+            if entry.th32ParentProcessID == me and name != "conhost.exe":
+                pids.append(int(entry.th32ProcessID))
+            if not k32.Process32Next(snap, ctypes.byref(entry)):
+                break
+    finally:
+        k32.CloseHandle(snap)
     return pids
 
 
@@ -124,6 +171,27 @@ def watchdog() -> None:
             print(f"YOURPDF_TIMEOUT killed {n} child process(es) for {len(stale)} stale request(s)", flush=True)
             for key in stale:
                 ACTIVE.finish(key)
+
+
+class RscPrefetchRewriteMiddleware:
+    """Next.js 16 static export writes the RSC segment payload nested (/x/__next.x/__PAGE__.txt)
+    but the client requests the dot form (/x/__next.x.__PAGE__.txt); rewrite so prefetch hits a real file."""
+
+    _pattern = re.compile(r"^(?P<base>.*/__next\.[^/]+)\.__PAGE__\.txt$")
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            m = self._pattern.match(path)
+            if m:
+                path = f"{m.group('base')}/__PAGE__.txt"
+                scope = dict(scope)
+                scope["path"] = path
+                scope["raw_path"] = path.encode("utf-8")
+        return await self.app(scope, receive, send)
 
 
 class LoopbackTokenMiddleware:
@@ -239,6 +307,7 @@ def main() -> None:
     prune_tmp()
     add_desktop_routes()
     app.add_middleware(LoopbackTokenMiddleware)
+    app.add_middleware(RscPrefetchRewriteMiddleware)
     app.mount("/", StaticFiles(directory=str(OUT_DIR), html=True), name="desktop-static")
 
     threading.Thread(target=watchdog, daemon=True).start()

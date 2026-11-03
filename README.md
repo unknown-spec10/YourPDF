@@ -10,6 +10,31 @@ Uploads land in the app's tmp dir and are deleted best-effort right after each t
 via `cleanup_paths` in `backend/app/tasks/common.py` — outputs are returned as
 `Content-Disposition: attachment` downloads, never stored for later retrieval.
 
+## Install (Windows)
+
+**[Download the installer ⬇](https://github.com/unknown-spec10/YourPDF/releases/latest/download/YourPDF-Desktop-setup.exe)** — then double-click it. It installs and launches in one step: no wizard, no admin prompt.
+
+That is the whole install: per-user, no admin rights, no Python or Node needed, everything
+bundled (~300 MB). Or open the
+[latest release page](https://github.com/unknown-spec10/YourPDF/releases/latest) and pick
+`YourPDF-Desktop-setup.exe` from the assets.
+
+Prefer a scripted install (it verifies the installer's SHA-256 first)? One command in PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/unknown-spec10/YourPDF/releases/latest/download/install.ps1 | iex"
+```
+
+It downloads the latest GitHub Release, verifies the installer's SHA-256,
+installs YourPDF Desktop per-user (no admin/UAC), and launches it. Re-run the
+same command to update. The build is unsigned, so SmartScreen may ask you to
+confirm; see `docs/install.md` for the offline/manual path, uninstall, and the
+release process.
+
+The installed app updates itself: it checks for a new release shortly after
+launch, downloads it in the background, and asks to restart. **Help → Check for
+Updates…** forces a check.
+
 ## What it does
 
 27 tool pages under `frontend/src/app/`. Every tool page is a client component
@@ -104,9 +129,11 @@ pdf-toolkit/
 │   ├── sidecar/serve.py       # desktop entry: token middleware, static mount, port handshake, OCR dispatch
 │   ├── scripts/build-sidecar.mjs   # PyInstaller --onedir freeze → desktop/build/sidecar
 │   ├── scripts/vendor-binaries.mjs # copies native installs → desktop/bin/
+│   ├── scripts/make-release.mjs    # stable setup alias + SHA256SUMS + install scripts
+│   ├── installer/             # install.ps1 / install.cmd / INSTALL.txt shipped in releases
 │   ├── bin/                   # bundled Ghostscript / Tesseract / Poppler (install-local, git-ignored)
 │   └── licenses/LICENSES.md   # third-party license texts + written source offers
-└── docs/                      # architecture.md + desktop-build.md
+└── docs/                      # architecture.md + desktop-build.md + install.md
 ```
 
 ## Request flow (synchronous, every tool)

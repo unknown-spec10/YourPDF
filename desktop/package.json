@@ -1,7 +1,7 @@
 {
   "name": "yourpdf-desktop",
   "productName": "YourPDF Desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "YourPDF Desktop — local PDF toolkit. Files never leave this machine.",
   "main": "shell/main.js",
@@ -13,42 +13,77 @@
   "scripts": {
     "start": "electron .",
     "start:debug": "electron . --remote-debugging-port=9224",
-    "build:frontend": "npm --prefix ../frontend run build",
+    "build:frontend": "node scripts/build-frontend.mjs",
     "build:sidecar": "node scripts/build-sidecar.mjs",
     "vendor": "node scripts/vendor-binaries.mjs",
     "pack": "electron-builder --win nsis",
-    "pack:dir": "electron-builder --win dir"
+    "pack:dir": "electron-builder --win dir",
+    "smoke": "node scripts/smoke.mjs",
+    "release:assets": "node scripts/make-release.mjs",
+    "dist": "npm run build:frontend && npm run build:sidecar && npm run vendor && npm run pack && npm run release:assets"
   },
   "devDependencies": {
     "electron": "^45.2.1",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "playwright-core": "^1.56.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
   },
   "build": {
     "appId": "com.yourpdf.desktop",
     "productName": "YourPDF Desktop",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "unknown-spec10",
+        "repo": "YourPDF"
+      }
+    ],
     "directories": {
       "output": "release",
       "buildResources": "assets"
     },
     "files": [
       "shell/**/*",
+      "node_modules/**/*",
       "package.json"
     ],
     "extraResources": [
-      { "from": "../frontend/out", "to": "frontend" },
-      { "from": "build/sidecar/yourpdf-backend", "to": "sidecar" },
-      { "from": "bin", "to": "bin" },
-      { "from": "licenses", "to": "licenses" }
+      {
+        "from": "../frontend/out",
+        "to": "frontend"
+      },
+      {
+        "from": "build/sidecar/yourpdf-backend",
+        "to": "sidecar"
+      },
+      {
+        "from": "bin",
+        "to": "bin"
+      },
+      {
+        "from": "licenses",
+        "to": "licenses"
+      }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.ico",
       "artifactName": "YourPDF-Desktop-${version}-setup.${ext}"
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowElevation": false,
+      "runAfterFinish": true,
       "deleteAppDataOnUninstall": true,
       "shortcutName": "YourPDF Desktop",
       "createDesktopShortcut": true,

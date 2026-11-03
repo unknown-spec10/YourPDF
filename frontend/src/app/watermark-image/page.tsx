@@ -33,6 +33,7 @@ export default function WatermarkImagePage() {
     submit,
     reset,
     downloadUrl,
+    fileName,
   } = useFileJob<WatermarkImageArgs>(watermarkImageSubmitter)
 
   useEffect(() => {
@@ -352,7 +353,7 @@ export default function WatermarkImagePage() {
                 <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mt-2 w-full max-w-full justify-center items-stretch sm:items-center">
                   <a
                     href={downloadUrl ?? ''}
-                    download
+                    download={fileName ?? undefined}
                     className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-accent px-6 text-sm font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
                   >
                     <Download className="h-4 w-4" />

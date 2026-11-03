@@ -1,0 +1,10 @@
+# Python packages needed to freeze the desktop sidecar on a build machine.
+# Runtime set matches backend/requirements.txt (the Floor file); the two extras are
+# desktop-build-only. local venv versions are pinned here so releases are repeatable.
+-r ../backend/requirements.txt
+
+# OCR runtime that the frozen sidecar dispatches into.
+ocrmypdf==17.13.0
+
+# Freezer.
+pyinstaller==6.22.3

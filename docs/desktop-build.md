@@ -9,42 +9,56 @@ binaries) on loopback.
 
 - Windows 10/11 x64, Node.js 20+, Python 3.12+
 - Backend venv at repo-root `../myenv` (or set `YOURPDF_PYTHON` to any venv
-  python with the backend deps installed):
-  `pip install -r backend/requirements.lock` (plus `PyInstaller` for the freeze)
+  python with the build deps installed):
+  `pip install -r desktop/requirements-build.txt` — backend runtime set plus
+  pinned `ocrmypdf` and `PyInstaller`
 - Native installs for vendoring (override with env vars, see §4):
   Ghostscript (`YOURPDF_GS`, default `D:/gs10.05.1`), Tesseract
   (`YOURPDF_TESSERACT`, default `C:/Program Files/Tesseract-OCR`), Poppler
   (`YOURPDF_POPPLER`, default `D:/poppler-26.02.0`)
 
-## 2. Step-by-step local build
+## 2. Build the installer
 
-Run in this order from the repo root:
+One command, from `desktop/`:
 
 ```powershell
-# 1. Static frontend export (from frontend/).
-#    NEXT_PUBLIC_API_URL MUST be empty: the export is served by the sidecar from
-#    the same loopback origin, so API calls are relative. A baked absolute URL
-#    would point the installed app at a dead host.
-cd frontend
-$env:NEXT_PUBLIC_API_URL = ""
-npm run build        # → frontend/out
-cd ..
-
-# 2. Freeze the backend (from desktop/). PyInstaller --onedir only; asar cannot
-#    hold Python (see gotchas). --copy-metadata ocrmypdf is enough for its plugins.
-cd desktop
-npm run build:sidecar  # → desktop/build/sidecar/yourpdf-backend/yourpdf-backend.exe
-
-# 3. Vendor native binaries (from desktop/).
-npm run vendor         # → desktop/bin/{gs,tesseract,poppler}
-
-# 4. Pack the installer (from desktop/).
-npm run pack           # → desktop/release/YourPDF-Desktop-<version>-setup.exe
+npm ci
+npm run dist
 ```
 
-`npm run build:frontend` (in `desktop/`) is shorthand for step 1. CI's
-`desktop-export` job (`.github/workflows/deploy.yml`, named `CI`) performs step 1
-on windows-latest with `NEXT_PUBLIC_API_URL: ""` and uploads `frontend/out`.
+`dist` runs the four stages below and then writes the release bundle. On a
+machine with the native toolchain installed this is all that is needed.
+
+The individual stages, if you want to run them separately:
+
+```powershell
+# 1. Static frontend export. The script sets NEXT_PUBLIC_API_URL="" because the
+#    export is served by the sidecar from the same loopback origin: API calls
+#    must be relative. A baked absolute URL would point the app at a dead host.
+cd desktop
+npm run build:frontend  # → frontend/out
+
+# 2. Freeze the backend. PyInstaller --onedir only; asar cannot hold Python
+#    (see gotchas). --copy-metadata ocrmypdf is enough for its plugins.
+npm run build:sidecar   # → build/sidecar/yourpdf-backend/yourpdf-backend.exe
+
+# 3. Vendor native binaries.
+npm run vendor          # → bin/{gs,tesseract,poppler}
+
+# 4. Pack the installer and build upload assets.
+npm run pack            # → release/YourPDF-Desktop-<version>-setup.exe
+npm run release:assets  # → release/YourPDF-Desktop-setup.exe + SHA256SUMS + install scripts
+```
+
+`release:assets` makes the stable `YourPDF-Desktop-setup.exe` name (used by the
+one-line installer), writes `SHA256SUMS.txt`, and copies `install.ps1`,
+`install.cmd` and `INSTALL.txt` into `release/`. Those five files are the
+GitHub Release assets.
+
+CI's `desktop-export` job (`.github/workflows/deploy.yml`, named `CI`) builds the
+static export on windows-latest with `NEXT_PUBLIC_API_URL: ""`. Releases are
+built by `.github/workflows/release-desktop.yml`, triggered by a `v*` tag; see
+`docs/install.md` for the publishing checklist.
 
 ## 3. What each `extraResources` entry is for
 
@@ -147,3 +161,55 @@ with header `X-YourPDF-Token: dev`.
   `[sys.executable, "-m", "ocrmypdf"]` and `serve.py` dispatches that argv into
   `ocrmypdf.__main__.run`. OCR bugs that reproduce only in the installed app
   usually live in this seam.
+- **Keep the stable asset name:** the one-line installer fetches
+  `.../releases/latest/download/install.ps1` and `YourPDF-Desktop-setup.exe`.
+  `release:assets` hardlinks the versioned installer to that stable name and
+  writes the checksum for both. Renaming or removing it breaks every installed
+  copy's update path; the version stays visible in the versioned filename and the
+  release tag.
+
+## 6. Publishing
+
+Releases are tag-driven: bump `desktop/package.json`, push a `v<version>` tag, and
+`.github/workflows/release-desktop.yml` builds on windows-latest and publishes
+the stable asset, checksums, and install scripts. The full checklist, plus the
+manual `gh release create` command for a local build, is in `docs/install.md`.
+
+The release must carry **all** of these or in-app updates break: the stable
+`YourPDF-Desktop-setup.exe`, the versioned `YourPDF-Desktop-<version>-setup.exe`,
+that file's `.blockmap`, and `latest.yml` (which names the versioned file and its
+sha512). `npm run release:assets` refuses to finish if `latest.yml` or the
+blockmap is missing, and the workflow's verify step checks the same list.
+
+## 7. Code signing (opt-in)
+
+v1 ships **unsigned**: Windows SmartScreen warns on first launch, and reputation
+accrues only with downloads. Nothing in the build needs to change to sign —
+`electron-builder` signs automatically when a certificate is present:
+
+| Secret / env | Value |
+|---|---|
+| `CSC_LINK` | base64 of a `.pfx`, or a path/URL to it |
+| `CSC_KEY_PASSWORD` | the `.pfx` password |
+
+Both are already wired into the release workflow as `secrets.CSC_LINK` /
+`secrets.CSC_KEY_PASSWORD`; add them to the repo and the next tagged build is
+signed. For local builds, set the same two env vars before `npm run pack`.
+
+Reality check before buying anything: EV certificates no longer grant instant
+SmartScreen reputation, and Azure Trusted Signing requires a US/Canada
+organisation with 3+ years of verifiable history. Signing buys authenticity and
+tamper-evidence, not a warning-free install — re-verify Microsoft's current rules
+at purchase time.
+
+## 8. Auto-update
+
+`electron-updater` is a runtime dependency, `build.publish` points at
+`unknown-spec10/YourPDF` on GitHub, and `shell/main.js` checks eight seconds
+after launch (silently), then on **Help → Check for Updates…**. Flow: check →
+download in background → dialog → `quitAndInstall`, with the sidecar tree killed
+first so nothing holds a file lock.
+
+Unsigned builds still update — the installer just re-runs silently. Signing does
+not change the mechanism. Local builds log *"No published versions on GitHub"*
+until the first release exists, which is expected.

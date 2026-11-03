@@ -40,6 +40,28 @@ from app.tasks.common import (
 logger = logging.getLogger(__name__)
 
 
+def _ocr_error_summary(raw: str) -> str:
+    """Turn ocrmypdf's DEBUG firehose into one sentence a user can act on.
+
+    ocrmypdf writes hundreds of DEBUG lines before failing, so the raw tail is useless in a
+    dialog. Known failure classes get a specific message; anything else falls back to the last
+    real error line.
+    """
+    text = raw or ""
+    low = text.lower()
+    if "encryptedpdferror" in low or "input pdf is encrypted" in low:
+        return "This PDF is password-protected. Remove the password with the Unlock tool, then run OCR."
+    if "not a pdf" in low or "cannot identify image file" in low:
+        return "That file isn't a readable PDF."
+    if "permission denied" in low:
+        return "The file couldn't be written. Check disk permissions or free space."
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped.startswith("[ERROR]"):
+            return stripped.replace("[ERROR]", "").strip()[:200] or "OCR failed."
+    return "OCR failed. See the desktop log (Help → Open Log Folder) for details."
+
+
 def _ocrmypdf_argv() -> list[str]:
     """Where to find ocrmypdf. Frozen desktop builds have no console script on PATH, so run
     the bundled module through the interpreter that hosts this process."""
@@ -1381,19 +1403,31 @@ def ocr_pdf_task(file_path: str, language: str = "eng", original_filename: str =
     output_filename = f"ocr_{uuid.uuid4()}.pdf"
     output_path = os.path.join(output_dir, output_filename)
 
+    cmd: list[str] = []
     try:
         cmd = [*_ocrmypdf_argv(), "--skip-text", "-l", language, file_path, output_path]
         logger.info(f"Running OCR command: {' '.join(cmd)}")
-        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=SUBPROCESS_TIMEOUT)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT)
+
+        # ocrmypdf can log a fatal error and still exit 0 when it is dispatched in-process
+        # (frozen desktop build), so the exit code alone is not trustworthy: require output.
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip()
+            logger.error(f"OCR command failed (code {proc.returncode}): {tail[-2000:]}")
+            raise Exception(_ocr_error_summary(tail))
+        if not os.path.exists(output_path):
+            tail = (proc.stderr or proc.stdout or "").strip()
+            logger.error(f"OCR produced no output file. ocrmypdf said: {tail[-2000:]}")
+            raise Exception(_ocr_error_summary(tail))
 
         data = read_bytes(output_path)
         download_name = _download_name(
             original_filename, output_filename, lambda base, ext: f"{base}_ocr{ext}"
         )
         return data, download_name
-    except FileNotFoundError:
-        logger.error("ocrmypdf command not found in PATH.")
-        raise Exception("OCR tool is not installed or configured on the server. Requires ocrmypdf and Tesseract OCR.")
+    except FileNotFoundError as e:
+        logger.error(f"OCR could not run: {e!r} (argv={cmd!r}, executable={sys.executable!r})")
+        raise Exception(f"OCR tool could not be started on this machine: {e}")
     except subprocess.TimeoutExpired:
         logger.error("OCR timed out after %s seconds", SUBPROCESS_TIMEOUT)
         raise Exception(SUBPROCESS_TIMEOUT_MESSAGE)

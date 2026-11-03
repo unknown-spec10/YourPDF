@@ -28,19 +28,43 @@ boundary — any local process or web page can reach the port.
 
 ```powershell
 # From desktop/. Requires the backend venv (../myenv, or YOURPDF_PYTHON).
-$env:NEXT_PUBLIC_API_URL = ""     # relative API calls; a baked URL points at a dead host
+npm ci
+npm run dist                      # everything: export → sidecar → vendor → pack → release assets
 
+# Individual stages
 npm run build:frontend            # frontend/out (next.config.ts: output "export")
 npm run build:sidecar             # build/sidecar/yourpdf-backend/ (PyInstaller --onedir)
 npm run vendor                    # bin/{gs,tesseract,poppler} (first build / version bumps)
 npm run pack                      # release/YourPDF-Desktop-<version>-setup.exe
+npm run release:assets            # stable alias + SHA256SUMS + install scripts
 
 npm run pack:dir                  # unpacked app in release/win-unpacked (no installer)
 npm start                         # dev shell (uses build/sidecar if present, else Python)
 ```
 
 `frontend/next.config.ts` always exports statically, so no env switch is needed
-there; the empty `NEXT_PUBLIC_API_URL` is the only frontend requirement.
+there; `build:frontend` sets the empty `NEXT_PUBLIC_API_URL` for you.
+`release:assets` produces the exact files uploaded to GitHub Releases; see
+`docs/install.md` for the one-command install and publishing steps.
+
+## Verify a build
+
+```powershell
+# 1. launch the packaged app with a debug port
+& "release/win-unpacked/YourPDF Desktop.exe" --remote-debugging-port=9225
+
+# 2. in another terminal — every tool endpoint + the cancel path, from inside the app
+npm run smoke
+```
+
+`scripts/smoke.mjs` drives the real UI origin (so Electron's session-level token
+applies), builds its own PDF fixture via `images-to-pdf`, runs all 28 endpoints
+against `fixtures/`, then starts an OCR and cancels it — asserting a fast failure,
+`/health` still 200, and no leftover gs/tesseract processes. Exit code 1 on any
+failure, so it can gate a release.
+
+Temp files go to `%APPDATA%\YourPDF Desktop\tmp` (the shell sets `YOURPDF_TMP`);
+logs to `%APPDATA%\YourPDF Desktop\logs\desktop.log`.
 
 ## Cancel
 
@@ -67,6 +91,15 @@ explicitly skips it; the quit path can still tree-kill the whole sidecar.
   `blob:` URL. Electron's `webContents.downloadURL()` reports `completed` and
   writes nothing; the working path is the preload in `shell/preload.js` (fetch
   bytes → IPC → main writes the file, where a native Save-As belongs).
+- The filename must come from the **response**, never from the link text. Every
+  tool page now sets `download={fileName}` (parsed from `Content-Disposition`),
+  and the preload takes the extension from the response **MIME type**. Skipping
+  either produced `.docx` responses saved as `Download Word File.pdf` — the file
+  opened in neither Word nor a PDF reader, so the button looked broken.
+- A save the user cannot see is a save that did not happen. `save-blob` records
+  the entry in `downloads.json`, broadcasts `yourpdf:saved`, and the preload
+  renders the toast; `File → Downloads…` (`Ctrl+J`) lists the history with
+  Open / Show in folder. Keep those three in step when changing the save path.
 - Python processes cannot read inside `app.asar` — the frozen backend,
   `frontend/out` and `bin/` must ship as `extraResources`.
 - Bundled executables are *not* at the top of their vendor trees: put

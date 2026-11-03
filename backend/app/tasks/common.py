@@ -25,12 +25,20 @@ BACKEND_ROOT = os.path.dirname(
 )
 
 
+def tmp_root() -> str:
+    """Where uploads/outputs live. The desktop shell sets YOURPDF_TMP to a writable
+    per-user directory; a frozen install directory should not be used as a scratch pad."""
+    return os.environ.get("YOURPDF_TMP") or os.path.join(BACKEND_ROOT, "tmp")
+
+
 def resolve_path(path_str: str) -> str:
     """Resolve an upload/tmp path to an absolute path under the backend root."""
     path_str = path_str.replace("\\", "/")
-    if not os.path.isabs(path_str):
-        path_str = os.path.abspath(os.path.join(BACKEND_ROOT, path_str))
-    return path_str
+    if os.path.isabs(path_str):
+        return path_str
+    if path_str.startswith("tmp/"):
+        return os.path.abspath(os.path.join(tmp_root(), path_str[4:]))
+    return os.path.abspath(os.path.join(BACKEND_ROOT, path_str))
 
 
 def resolve_paths(paths: list[str]) -> list[str]:
@@ -40,7 +48,7 @@ def resolve_paths(paths: list[str]) -> list[str]:
 
 def ensure_tmp_dir() -> str:
     """Return the backend ``tmp/`` directory, creating it if needed."""
-    tmp_dir = os.path.join(BACKEND_ROOT, "tmp")
+    tmp_dir = tmp_root()
     os.makedirs(tmp_dir, exist_ok=True)
     return tmp_dir
 

@@ -1,0 +1,167 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish installer
+    runs-on: windows-latest
+    env:
+      # Code signing is opt-in: add CSC_LINK (base64 .pfx) and CSC_KEY_PASSWORD as repo
+      # secrets and electron-builder signs every artifact automatically. Empty values make
+      # the builder skip signing (v1 ships unsigned; SmartScreen then warns on first run).
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "desktop/requirements-build.txt"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r desktop/requirements-build.txt
+
+      - name: Vendor Poppler
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod `
+            -Uri 'https://api.github.com/repos/oschwartz10612/poppler-windows/releases/latest' `
+            -Headers @{ 'User-Agent' = 'yourpdf-ci' }
+          $asset = $release.assets | Where-Object { $_.name -match '^Release-.*\.zip$' } |
+            Select-Object -First 1
+          if (-not $asset) { throw 'No Poppler release zip found' }
+
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile poppler.zip
+          Expand-Archive poppler.zip -DestinationPath C:\poppler
+          $root = Get-ChildItem C:\poppler -Directory | Select-Object -First 1
+          "YOURPDF_POPPLER=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          # pdf2image shells out to pdfinfo/pdftoppm, so the tests need Poppler on PATH —
+          # without it the sign/pdf-to-images tests 500 and the release never publishes.
+          $bin = Join-Path $root.FullName 'Library\bin'
+          foreach ($exe in @('pdfinfo.exe', 'pdftoppm.exe', 'pdftocairo.exe')) {
+            if (-not (Test-Path (Join-Path $bin $exe))) { throw "Poppler is missing $exe under $bin" }
+          }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Run backend tests
+        working-directory: backend
+        run: python -m pytest -q tests
+
+      - name: Install native toolchain (Ghostscript, Tesseract)
+        shell: pwsh
+        run: |
+          choco install ghostscript tesseract --yes --no-progress
+
+          $gs = Get-ChildItem 'C:\Program Files\gs' -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $gs) { throw 'Ghostscript install not found under C:\Program Files\gs' }
+
+          $tess = 'C:\Program Files\Tesseract-OCR'
+          if (-not (Test-Path "$tess\tesseract.exe")) { throw 'Tesseract install not found' }
+
+          "YOURPDF_GS=$($gs.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "YOURPDF_TESSERACT=$tess" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "YOURPDF_PYTHON=$((Get-Command python).Source)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Check release tag matches package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match desktop/package.json version $version"
+          }
+
+      - name: Install Node dependencies
+        run: |
+          npm ci --prefix frontend
+          npm ci --prefix desktop
+
+      - name: Build release bundle
+        working-directory: desktop
+        run: npm run dist
+
+      - name: Smoke test the packaged build
+        # Non-blocking on purpose: Electron on a headless runner is the kind of thing that goes
+        # flaky, and a flaky gate must never block a release. Flip to blocking once it has run
+        # green on a few tags.
+        continue-on-error: true
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $exe = "release/win-unpacked/YourPDF Desktop.exe"
+          if (-not (Test-Path $exe)) { throw "Missing $exe" }
+
+          $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9225' -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                $null = Invoke-WebRequest -Uri 'http://127.0.0.1:9225/json/version' -UseBasicParsing -TimeoutSec 2
+                $ready = $true
+                break
+              } catch { }
+            }
+            if (-not $ready) { throw 'App did not expose a debug port within 120s' }
+            npm run smoke
+            if ($LASTEXITCODE -ne 0) { throw "Smoke test failed (exit $LASTEXITCODE)" }
+          } finally {
+            Get-Process -Name 'YourPDF Desktop' -ErrorAction SilentlyContinue | Stop-Process -Force
+          }
+
+      - name: Verify bundle
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $required = @(
+            "release/YourPDF-Desktop-${version}-setup.exe",
+            "release/YourPDF-Desktop-${version}-setup.exe.blockmap",
+            'release/YourPDF-Desktop-setup.exe',
+            'release/latest.yml',
+            'release/SHA256SUMS.txt',
+            'release/install.ps1',
+            'release/install.cmd',
+            'release/INSTALL.txt'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing release asset: $file" }
+          }
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/YourPDF-Desktop-setup.exe
+            desktop/release/YourPDF-Desktop-*-setup.exe
+            desktop/release/YourPDF-Desktop-*-setup.exe.blockmap
+            desktop/release/latest.yml
+            desktop/release/SHA256SUMS.txt
+            desktop/release/install.ps1
+            desktop/release/install.cmd
+            desktop/release/INSTALL.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true

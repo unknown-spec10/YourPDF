@@ -16,7 +16,7 @@
     "build:frontend": "node scripts/build-frontend.mjs",
     "build:sidecar": "node scripts/build-sidecar.mjs",
     "vendor": "node scripts/vendor-binaries.mjs",
-    "pack": "electron-builder --win nsis",
+    "pack": "electron-builder --win nsis --publish never",
     "pack:dir": "electron-builder --win dir",
     "smoke": "node scripts/smoke.mjs",
     "release:assets": "node scripts/make-release.mjs",

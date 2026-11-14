@@ -93,11 +93,17 @@ jobs:
           # validated build used 10.05.1 — different rendering, different bundled size, and
           # no commit to review. Artifex ships an NSIS installer, so /S with /D installs an
           # exact version at a known path. Keep these in sync with desktop/docs.
+          # Ghostscript: EXTRACT, do not install. The official NSIS installer declares
+          # requireAdministrator; in a non-interactive runner that is a UAC prompt nobody can
+          # answer, and the step hangs forever (22 minutes and no output, once). 7-Zip is
+          # preinstalled on windows-latest and unpacks the same tree without elevation.
           $gsUrl = 'https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10051/gs10051w64.exe'
           Invoke-WebRequest -Uri $gsUrl -OutFile gs.exe
-          Start-Process -FilePath .\gs.exe -ArgumentList '/S /D=C:\gs' -Wait
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (-not (Test-Path $sevenZip)) { throw '7-Zip not found on the runner' }
+          & $sevenZip x gs.exe -oC:\gs -y | Out-Null
           $gsExe = 'C:\gs\bin\gswin64c.exe'
-          if (-not (Test-Path $gsExe)) { throw "Ghostscript install missing $gsExe" }
+          if (-not (Test-Path $gsExe)) { throw "Ghostscript extract missing $gsExe" }
           $gsVersion = (& $gsExe -version) -join ' '
           if ($gsVersion -notmatch '10\.05\.1') { throw "Unexpected Ghostscript: $gsVersion" }
 

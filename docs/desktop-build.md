@@ -31,10 +31,12 @@ newer `numpy`/`opencv`/`pymupdf` on the runner and produced a 294 MB sidecar nex
 `myenv\Scripts\python.exe -m pip freeze`, run the suite, commit the lock.
 
 The native tools are pinned the same way in the workflow: Ghostscript **10.05.1** from
-Artifex's own installer (`/S /D=C:\gs`, asserted with `-version`) and Tesseract
-**5.5.0.20241111** (`choco --version`). Chocolatey's unpinned `ghostscript` gave CI
-10.08.0 — different rendering and a different bundled size, with no commit to review.
-Poppler is pinned by URL (§ Vendor Poppler).
+Artifex's own build, **extracted with 7-Zip** rather than installed (that installer
+declares `requireAdministrator`, so a runner step waits forever on a UAC prompt), and
+Tesseract **5.5.0.20241111** by exact Chocolatey version. Both are asserted with
+`-version` / `--version`, so a mismatch fails the build instead of shipping. Chocolatey's
+unpinned `ghostscript` had given CI 10.08.0 — different rendering and a different bundled
+size, with no commit to review. Poppler is pinned by URL (§ Vendor Poppler).
 
 ## 2. Build the installer
 

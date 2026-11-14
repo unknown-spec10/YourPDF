@@ -1,6 +1,6 @@
-// Builds frontend/out with the desktop API base. The empty NEXT_PUBLIC_API_URL is
-// required: the sidecar serves the export from the same loopback origin, so a baked
-// absolute URL would point the installed app at a dead host.
+// Builds frontend/out for the desktop app. The empty NEXT_PUBLIC_API_URL is required: Tauri
+// serves this export itself and injects window.__YOURPDF_API__ at window creation (see
+// src/lib/api.ts), so a baked absolute URL would point the installed app at a dead host.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

@@ -8,9 +8,9 @@ each keeps its own license.
 |---|---|---|---|
 | Ghostscript | 10.05.1 | AGPL-3.0 | `bin/gs/` |
 | Tesseract OCR | 5.x | Apache-2.0 | `bin/tesseract/` |
-| Tesseract tessdata (eng, osd) | — | Apache-2.0 | `bin/tesseract/tessdata/` |
+| Tesseract tessdata (eng) | — | Apache-2.0 | `bin/tesseract/tessdata/` |
 | Poppler (pdftoppm, pdfinfo) | 26.02.0 | GPL-2.0 | `bin/poppler/` |
-| Electron / Chromium | 45.x | MIT + BSD-style | `YourPDF Desktop.exe` runtime |
+| Tauri | 2.x | MIT / Apache-2.0 | `YourPDF Desktop.exe` shell |
 | PyInstaller bootloader | 6.x | GPL-2.0 with bootloader exception | frozen backend |
 
 ## Written offers for source
@@ -28,4 +28,6 @@ dialog and source will be provided on request.
 
 - Ghostscript and Poppler are separate executables spawned by the backend; they are not linked
   into YourPDF's code. Their licenses do not relicense YourPDF itself.
+- The webview is Microsoft Edge WebView2, shipped and serviced by Windows. It is not
+  redistributed in this installer: the bootstrapper downloads it only when it is absent.
 - `ocrmypdf` (MPL-2.0) requires Ghostscript; it is bundled inside the frozen backend.

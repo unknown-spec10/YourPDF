@@ -1,6 +1,20 @@
 import axios from 'axios'
 
-export const API_URL: string = process.env.NEXT_PUBLIC_API_URL ?? ''
+// The desktop app serves this export from the Tauri origin (http://tauri.localhost on
+// Windows) and injects the loopback API origin at window creation, before any page script
+// runs. NEXT_PUBLIC_API_URL stays "" for the desktop build. The injected global must be read
+// at module load: it is present by then.
+declare global {
+  interface Window {
+    __YOURPDF_API__?: string
+    __YOURPDF_TOKEN__?: string
+  }
+}
+
+const injectedApiUrl = (): string =>
+  typeof window === 'undefined' ? '' : (window.__YOURPDF_API__ ?? '')
+
+export const API_URL: string = injectedApiUrl() || (process.env.NEXT_PUBLIC_API_URL ?? '')
 
 // Canonical versioned API prefix. Legacy /api/* paths keep serving
 // for backward compatibility; new calls should use /api/v1/*.
@@ -29,17 +43,19 @@ if (API_KEY) {
   apiClient.defaults.headers.common['X-API-Key'] = API_KEY
 }
 
-// Per-launch desktop token. The Electron shell loads the UI as `/?t=<token>`;
-// every API request must carry it as `X-YourPDF-Token` because a loopback
-// port is reachable by any local process or any web page in the user's
-// browser. Read once at module load: `?t=` is persisted to sessionStorage
-// under `yourpdf_token`, then stripped from the visible URL so it does not
-// leak into a copied URL or a Referer header. Absent in plain web usage.
+// Per-launch desktop token, normally injected as `window.__YOURPDF_TOKEN__`. Every API
+// request must carry it as `X-YourPDF-Token` because a loopback port is reachable by any
+// local process or any web page in the user's browser. A `?t=<token>` query parameter is
+// still accepted for a plain-browser session: it is persisted to sessionStorage under
+// `yourpdf_token`, then stripped from the visible URL so it does not leak into a copied URL
+// or a Referer header. Absent in plain web usage.
 const DESKTOP_TOKEN_KEY = 'yourpdf_token'
 
 function initDesktopToken(): string {
   if (typeof window === 'undefined') return ''
   try {
+    // Injected as a window global; ?t= (below) covers a plain-browser session.
+    if (window.__YOURPDF_TOKEN__) return window.__YOURPDF_TOKEN__
     const params = new URLSearchParams(window.location.search)
     const queryToken = params.get('t')
     if (queryToken) {

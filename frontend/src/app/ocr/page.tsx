@@ -15,11 +15,11 @@ type OcrArgs = { file: File; language: string }
 const ocrSubmitter = ({ file, language }: OcrArgs) =>
   submitJob('/api/ocr', buildSingleFileFormData(file, { language }))
 
+// Only English is bundled with the desktop build (vendor-binaries.mjs keeps just
+// eng.traineddata), so offering other languages here would advertise OCR that fails
+// in the installed app. Add a language to both places together, or not at all.
 const LANGUAGE_LABELS: Record<string, string> = {
   eng: 'English',
-  spa: 'Spanish',
-  fra: 'French',
-  deu: 'German',
 }
 
 export default function OcrPage() {
@@ -100,7 +100,7 @@ export default function OcrPage() {
           >
             <DropZone onFileAccepted={setFile} />
             <p className="text-center text-xs text-muted">
-              OCR adds a searchable text layer. Pick the document language for best accuracy.
+              OCR adds a searchable text layer to scanned pages.
             </p>
           </motion.div>
         )}
@@ -154,16 +154,9 @@ export default function OcrPage() {
               <div className="flex flex-col gap-4 min-w-0 order-1">
                 <div className="flex flex-col gap-1.5 min-w-0">
                   <span className="text-[13px] font-semibold">01 — Document Language</span>
-                  <select
-                    value={language}
-                    onChange={(e) => setLanguage(e.target.value)}
-                    className="w-full h-11 px-3.5 rounded-lg border border-border bg-surface text-sm text-foreground focus:outline-none focus:border-accent transition-colors"
-                  >
-                    <option value="eng">English (eng)</option>
-                    <option value="spa">Spanish (spa)</option>
-                    <option value="fra">French (fra)</option>
-                    <option value="deu">German (deu)</option>
-                  </select>
+                  <div className="w-full h-11 px-3.5 flex items-center rounded-lg border border-border bg-surface text-sm text-foreground">
+                    English (eng)
+                  </div>
                   <p className="text-xs text-muted leading-relaxed">
                     Scanned pages are re-rendered with a searchable layer. Larger files take a few minutes.
                   </p>
@@ -272,7 +265,7 @@ export default function OcrPage() {
                 <div className="min-w-0">
                   <h3 className="text-2xl font-bold">OCR Failed</h3>
                   <p className="text-sm text-muted mt-1 max-w-md">
-                    {submitError || 'The OCR server returned an execution error. Check your file or languages.'}
+                    {submitError || 'The OCR server returned an execution error. Check your file and try again.'}
                   </p>
                 </div>
                 <button

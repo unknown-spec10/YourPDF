@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Desktop shell permissions for the main and downloads windows",
+  "windows": ["main", "downloads"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "notification:default",
+    "updater:default"
+  ]
+}

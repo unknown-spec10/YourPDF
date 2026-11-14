@@ -2,7 +2,7 @@
 
 YourPDF is a privacy-first, open-source PDF, image, and office-file toolkit that runs
 entirely on your own machine as a Windows desktop app. There is no server, no account,
-and no upload: the Electron shell spawns a local FastAPI backend on loopback, and
+and no upload: the Tauri shell spawns a local FastAPI backend on loopback, and
 **files never leave the machine**. Every tool processes synchronously — each `POST`
 returns processed bytes (or JSON for text extraction) in the same response. There is
 **no Celery, no Redis, no Flower, no job queue, no polling, and no database**.
@@ -15,7 +15,7 @@ via `cleanup_paths` in `backend/app/tasks/common.py` — outputs are returned as
 **[Download the installer ⬇](https://github.com/unknown-spec10/YourPDF/releases/latest/download/YourPDF-Desktop-setup.exe)** — then double-click it. It installs and launches in one step: no wizard, no admin prompt.
 
 That is the whole install: per-user, no admin rights, no Python or Node needed, everything
-bundled (~300 MB). Or open the
+bundled (~130 MB). Or open the
 [latest release page](https://github.com/unknown-spec10/YourPDF/releases/latest) and pick
 `YourPDF-Desktop-setup.exe` from the assets.
 
@@ -39,10 +39,11 @@ Updates…** forces a check.
 
 27 tool pages under `frontend/src/app/`. Every tool page is a client component
 (`'use client'`) that POSTs files to the local backend (`submitJob` in
-`frontend/src/lib/api.ts`, relative same-origin API base, no API key) and downloads
-the result. In the packaged app the result card links to a `blob:` URL, which
-Electron cannot save directly, so `desktop/shell/preload.js` fetches the bytes and
-hands them over IPC to the main process, which writes the file to your Downloads folder.
+`frontend/src/lib/api.ts`; the API base and per-launch token are injected as window
+globals) and downloads the result. In the packaged app the result card links to a
+`blob:` URL, which the webview cannot save directly, so `desktop/src-tauri/src/bridge.js`
+fetches the bytes and hands them to the Rust `save_blob` command, which writes the file
+to your Downloads folder.
 
 ### PDF tools (`backend/app/routers/pdf.py`)
 
@@ -52,7 +53,7 @@ hands them over IPC to the main process, which writes the file to your Downloads
 - **PDF to Images** (`/pdf-to-images`) — PNG/JPG per page (`format`, `dpi`, `pages`: `"all"` or `"1-3, 5"`; a single selected page returns a direct image, subsets otherwise return ZIP).
 - **Images to PDF** (`/images-to-pdf`) — PNG/JPG to PDF via img2pdf.
 - **Extract Text** (`/extract-text`) — layout-preserving text extraction (`extraction_mode="layout"`); returns JSON text in-browser, or a `.txt` download when `export_txt=true`.
-- **PDF to Word** (`/pdf-to-docx`) — via `pdf2docx`; result page renders an in-browser Word preview with `mammoth` (`convertToHtml`) plus a `.docx` download.
+- **PDF to Word** (`/pdf-to-docx`) — via `pdf2docx`; scanned PDFs are OCR'd automatically (an existing OCR layer is reused), and scan output is text-only, so the page image is not carried over. Result page renders an in-browser Word preview with `mammoth` (`convertToHtml`) plus a `.docx` download.
 - **Word to PDF** (`/docx-to-pdf`) — via LibreOffice.
 - **Protect** (`/protect`) — password-encrypt, synchronous, direct blob download.
 - **Unlock** (`/unlock`) — password-decrypt, synchronous, direct blob download.
@@ -86,25 +87,25 @@ hands them over IPC to the main process, which writes the file to your Downloads
 ## How it is built
 
 ```
-YourPDF Desktop (Electron)
+YourPDF Desktop (Tauri v2, WebView2)
+  ├─ serves the static Next.js export at  tauri://        (app origin)
   └─ spawns yourpdf-backend.exe (PyInstaller --onedir freeze of FastAPI)
-       ├─ serves the static Next.js export at  /            (same origin)
-       ├─ serves the API at                    /api + /api/v1
+       ├─ serves the API at                    /api + /api/v1 (loopback)
        └─ shells out to bundled Ghostscript / Tesseract / Poppler / LibreOffice
 ```
 
 - Distribution is the desktop app only. The frontend is a static export
   (`frontend/next.config.ts`: `output: "export"`, `trailingSlash: true`,
-  `images: { unoptimized: true }`) served by the same FastAPI process as the API,
-  so frontend and API are same-origin: no CORS, relative API base, no API key.
-- Every API request must carry `X-YourPDF-Token`: the shell generates a random
-  token per launch and injects it at the Electron session level
-  (`webRequest.onBeforeSendHeaders`). Static assets and `/health` are exempt.
-  Loopback is NOT a trust boundary — any local process or web page could otherwise
-  POST to the server.
-- The installer is `electron-builder` NSIS, per-user (no admin),
-  `deleteAppDataOnUninstall`; `extraResources` = frontend export + frozen sidecar
-  + native binaries + licenses.
+  `images: { unoptimized: true }`) embedded in the app and served from the Tauri
+  origin; the API runs on a loopback port, so the sidecar allows that origin via
+  CORS and exposes `Content-Disposition`/`X-Job-Notice` for downloads.
+- Every API request must carry `X-YourPDF-Token`: the shell generates a random token
+  per launch and injects it (with the API base) as a window global before any page
+  script runs. Static assets and `/health` are exempt. Loopback is NOT a trust
+  boundary — any local process or web page could otherwise POST to the server.
+- The installer is Tauri's NSIS target, per-user (no admin), with `bundle.resources`
+  = frozen sidecar + native binaries + licenses. Updates are signed with an Ed25519
+  key and verified before install.
 
 ## Repository layout
 
@@ -124,12 +125,12 @@ pdf-toolkit/
 │       ├── app/               # 27 tool dirs + how-it-works + tools index (all tools are client components)
 │       └── lib/api.ts         # relative API base, submitJob (direct POST → Response), blob-download helpers
 ├── desktop/
-│   ├── shell/main.js          # Electron main: token, sidecar lifecycle, save channel, menu, logs
-│   ├── shell/preload.js       # blob-URL downloads → IPC save to Downloads folder
-│   ├── sidecar/serve.py       # desktop entry: token middleware, static mount, port handshake, OCR dispatch
+│   ├── src-tauri/src/lib.rs   # Tauri core: token, sidecar lifecycle, commands, menu, logs, updater
+│   ├── src-tauri/src/bridge.js# injected into every window: window.yourpdf + blob-URL save
+│   ├── sidecar/serve.py       # desktop entry: token middleware, optional static mount, port handshake, OCR dispatch
 │   ├── scripts/build-sidecar.mjs   # PyInstaller --onedir freeze → desktop/build/sidecar
-│   ├── scripts/vendor-binaries.mjs # copies native installs → desktop/bin/
-│   ├── scripts/make-release.mjs    # stable setup alias + SHA256SUMS + install scripts
+│   ├── scripts/vendor-binaries.mjs # copies + prunes native installs → desktop/bin/
+│   ├── scripts/smoke.mjs           # 28-endpoint smoke suite driven over WebView2 CDP
 │   ├── installer/             # install.ps1 / install.cmd / INSTALL.txt shipped in releases
 │   ├── bin/                   # bundled Ghostscript / Tesseract / Poppler (install-local, git-ignored)
 │   └── licenses/LICENSES.md   # third-party license texts + written source offers
@@ -184,15 +185,14 @@ exe is absent). Logs go to the app log dir (see below).
 
 ## Where data lives
 
-The app keeps no documents. Per-launch state lives under Electron's user-data
-directory:
+The app keeps no documents. Per-launch state lives under the app's data directory:
 
-- Logs: `%APPDATA%\YourPDF Desktop\logs` (`desktop.log`)
-- Temp uploads/outputs: `%APPDATA%\YourPDF Desktop\tmp` (pruned at startup, deleted
-  best-effort after each request)
+- Logs: `%LOCALAPPDATA%\com.yourpdf.desktop\logs` (`desktop.log`)
+- Temp uploads/outputs: `%LOCALAPPDATA%\com.yourpdf.desktop\tmp` (pruned at startup,
+  deleted best-effort after each request)
 
-Uninstalling removes app data (`deleteAppDataOnUninstall`). Saved results go to
-your Downloads folder via the Electron save channel.
+The NSIS uninstaller removes the installed app. Saved results go to your Downloads
+folder via the Rust save command.
 
 ## What is bundled
 
@@ -211,7 +211,7 @@ sidecar dispatches that argv into the bundled CLI.
 
 ## Tests
 
-Backend suite: 105 tests, all passing (`cd backend && pytest`). CI (`.github/workflows/deploy.yml`,
+Backend suite: 111 tests, all passing (`cd backend && pytest`). CI (`.github/workflows/deploy.yml`,
 named `CI`) runs backend tests, frontend lint, and a `desktop-export` job that
 builds `frontend/out` on windows-latest with `NEXT_PUBLIC_API_URL=""`. There is
 no deploy job — distribution is the desktop installer (see `docs/desktop-build.md`).

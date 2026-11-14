@@ -4,7 +4,7 @@ Additive by design — nothing in backend/ is modified. Dev run:
 
     YOURPDF_TOKEN=dev ..\\..\\myenv\\Scripts\\python.exe serve.py
 
-Prints `YOURPDF_PORT <port>` on stdout once ready — the handshake the Electron shell reads
+Prints `YOURPDF_PORT <port>` on stdout once ready — the handshake the desktop shell reads
 before loading the UI (no hardcoded port, no race).
 """
 import os
@@ -29,6 +29,10 @@ from app.main import app  # noqa: E402
 
 TOKEN = os.environ.get("YOURPDF_TOKEN") or secrets.token_urlsafe(24)
 OUT_DIR = Path(os.environ.get("YOURPDF_OUT") or (REPO / "frontend" / "out"))
+# The desktop shell serves the export itself and only needs the API, so it spawns with
+# YOURPDF_SERVE_STATIC=0. Leaving it at 1 also serves frontend/out from this server, which is
+# handy for a plain-browser session against the real backend.
+SERVE_STATIC = os.environ.get("YOURPDF_SERVE_STATIC", "1") != "0"
 
 OPEN_PATHS = ("/health", "/healthz", "/api/v1/capabilities")
 OPEN_PREFIXES = ("/_next/", "/fonts/", "/favicon", "/icons/")
@@ -40,7 +44,22 @@ LONG_TIMEOUT = int(os.environ.get("YOURPDF_LONG_TIMEOUT", "300"))
 LONG_PATHS = ("/ocr", "/docx-to-pdf", "/pptx-to-pdf", "/merge-docx", "/merge-pptx", "/pdf-to-docx")
 
 
+def _log(message: str) -> None:
+    """Desktop status prints must never be able to break a request. When the shell stops
+    draining our stdout the pipe closes, and print(flush=True) raises OSError EINVAL —
+    inside an endpoint that aborts the HTTP response mid-flight. Callers on the request
+    path (cancel, watchdog) use this instead of print."""
+    try:
+        print(message, flush=True)
+    except OSError:
+        pass
+
+
 def _is_static(path: str, method: str) -> bool:
+    # CORS preflight never carries the token (browsers omit custom headers on OPTIONS),
+    # so it must pass or a cross-origin UI can never reach the API at all.
+    if method == "OPTIONS":
+        return True
     if method in ("GET", "HEAD") and not path.startswith("/api/"):
         return True
     return path.startswith(OPEN_PREFIXES) or path in OPEN_PATHS
@@ -65,15 +84,22 @@ def child_pids() -> list[int]:
         return _child_pids_ctypes()
     except Exception:
         pass
-    out = _run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            f"Get-CimInstance Win32_Process -Filter 'ParentProcessId={os.getpid()}' | "
-            'ForEach-Object { "$($_.ProcessId) $($_.Name)" }',
-        ]
-    )
+    # Fallback only: this spawns PowerShell (~2s). It must never raise — a console-less
+    # child (CREATE_NO_WINDOW) can fail Process creation outright with Errno 22, and an
+    # exception here would escape the /cancel handler.
+    try:
+        out = _run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"Get-CimInstance Win32_Process -Filter 'ParentProcessId={os.getpid()}' | "
+                'ForEach-Object { "$($_.ProcessId) $($_.Name)" }',
+            ]
+        )
+    except OSError as e:
+        _log(f"YOURPDF_CHILD_PIDS fallback failed: {e}")
+        return []
     pids: list[int] = []
     for line in out.stdout.splitlines():
         parts = line.split()
@@ -102,8 +128,21 @@ def _child_pids_ctypes() -> list[int]:
         ]
 
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Declare the signatures: without restype, ctypes assumes a 32-bit int and truncates
+    # the 64-bit snapshot HANDLE. That silently broke enumeration, dropped the code into
+    # the PowerShell fallback, and the fallback raised Errno 22 in a console-less child —
+    # which surfaced as POST /api/v1/cancel dying mid-response ("Failed to fetch").
+    k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k32.Process32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32)]
+    k32.Process32First.restype = wintypes.BOOL
+    k32.Process32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32)]
+    k32.Process32Next.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+
     snap = k32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
-    if snap == -1:
+    if snap == wintypes.HANDLE(-1).value:
         raise OSError("CreateToolhelp32Snapshot failed")
 
     entry = PROCESSENTRY32()
@@ -126,11 +165,20 @@ def _child_pids_ctypes() -> list[int]:
 
 def kill_task_children() -> int:
     """Aborting a request only drops the HTTP response; the work keeps burning CPU.
-    Killing the tree is what actually cancels a merge/OCR."""
+    Killing the tree is what actually cancels a merge/OCR. Never raises: Cancel is a
+    last-resort action and must not be able to take the server down with it."""
     killed = 0
-    for pid in child_pids():
-        _run(["taskkill", "/PID", str(pid), "/T", "/F"])
-        killed += 1
+    try:
+        pids = child_pids()
+    except Exception as e:
+        _log(f"YOURPDF_CANCEL enumerate failed: {e}")
+        return 0
+    for pid in pids:
+        try:
+            _run(["taskkill", "/PID", str(pid), "/T", "/F"])
+            killed += 1
+        except OSError as e:
+            _log(f"YOURPDF_CANCEL taskkill {pid} failed: {e}")
     return killed
 
 
@@ -168,7 +216,7 @@ def watchdog() -> None:
         stale = ACTIVE.expired()
         if stale:
             n = kill_task_children()
-            print(f"YOURPDF_TIMEOUT killed {n} child process(es) for {len(stale)} stale request(s)", flush=True)
+            _log(f"YOURPDF_TIMEOUT killed {n} child process(es) for {len(stale)} stale request(s)")
             for key in stale:
                 ACTIVE.finish(key)
 
@@ -273,7 +321,7 @@ def add_desktop_routes() -> None:
     @app.post("/api/v1/cancel")
     def cancel():
         killed = kill_task_children()
-        print(f"YOURPDF_CANCEL killed {killed} child process(es)", flush=True)
+        _log(f"YOURPDF_CANCEL killed {killed} child process(es)")
         return JSONResponse({"killed": killed})
 
 
@@ -300,15 +348,18 @@ def main() -> None:
         ocrmypdf_run()
         return
 
-    if not OUT_DIR.is_dir():
-        print(f"YOURPDF_ERROR missing frontend export at {OUT_DIR}", flush=True)
-        raise SystemExit(1)
-
     prune_tmp()
     add_desktop_routes()
     app.add_middleware(LoopbackTokenMiddleware)
     app.add_middleware(RscPrefetchRewriteMiddleware)
-    app.mount("/", StaticFiles(directory=str(OUT_DIR), html=True), name="desktop-static")
+
+    if SERVE_STATIC:
+        if not OUT_DIR.is_dir():
+            print(f"YOURPDF_ERROR missing frontend export at {OUT_DIR}", flush=True)
+            raise SystemExit(1)
+        app.mount("/", StaticFiles(directory=str(OUT_DIR), html=True), name="desktop-static")
+    else:
+        print("YOURPDF_API_ONLY static export not served", flush=True)
 
     threading.Thread(target=watchdog, daemon=True).start()
 

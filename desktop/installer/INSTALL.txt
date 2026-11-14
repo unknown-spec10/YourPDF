@@ -38,7 +38,8 @@ keeps your settings.
 Uninstall
 ---------
 Settings > Apps > Installed apps > YourPDF Desktop > Uninstall.
-App data (%APPDATA%\YourPDF Desktop) is removed too.
+App data (%LOCALAPPDATA%\com.yourpdf.desktop) is left in place; delete that
+folder yourself for a completely clean slate.
 
 Unsigned build
 --------------
@@ -48,5 +49,6 @@ check above is what guarantees the downloaded file is the one published.
 
 Privacy
 -------
-Everything runs on this machine. Files are never uploaded. The app only talks
-to 127.0.0.1.
+Everything runs on this machine. Files are never uploaded. Tools only talk to
+127.0.0.1. The single outbound request is the optional update check, which
+fetches latest.json from GitHub — no files and no telemetry are sent.

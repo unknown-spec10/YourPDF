@@ -1,6 +1,7 @@
 // Vendors the native toolchain into desktop/bin so the installer is self-contained.
-// Copies the full upstream installs (size accepted 2026-11-01): trimming saves ~60–80MB and
-// costs a fragile build script.
+// Copies the upstream installs, then drops payloads nothing can read at runtime: docs,
+// examples, C headers and import libraries. Declared as data below so a new upstream layout
+// shows up as "PRUNED ... (absent)" instead of silently re-adding 40MB.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,17 @@ const SOURCES = [
   },
 ];
 
+// Runtime-dead payloads, relative to each vendor root. Measured on the 2026-11 vendor set:
+// gs doc+examples ≈ 23.7MB, poppler Library/lib ≈ 15.5MB (MSVC import stubs, never loaded),
+// Library/include ≈ 1.9MB (C headers). tesseract has none — its 29MB libicudt75.dll is real.
+// poppler share/poppler is deliberately KEPT: it carries the CJK CMaps/cidToUnicode tables
+// that rendering and text extraction of CJK PDFs need.
+const PRUNE = {
+  gs: ["doc", "examples"],
+  tesseract: [],
+  poppler: [path.join("Library", "doc"), path.join("Library", "include"), path.join("Library", "lib")],
+};
+
 fs.mkdirSync(binDir, { recursive: true });
 
 let total = 0;
@@ -37,9 +49,26 @@ for (const src of SOURCES) {
   const dest = path.join(binDir, src.name);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(src.from, dest, { recursive: true });
+
+  let pruned = 0;
+  for (const rel of PRUNE[src.name] ?? []) {
+    const target = path.join(dest, rel);
+    if (!fs.existsSync(target)) {
+      console.log(`[vendor] ${src.name}: prune target absent, skipped: ${rel}`);
+      continue;
+    }
+    const freed = du(target);
+    fs.rmSync(target, { recursive: true, force: true });
+    pruned += freed;
+    console.log(`[vendor] ${src.name}: pruned ${rel} (${(freed / 1e6).toFixed(1)} MB)`);
+  }
+
   const size = du(dest);
   total += size;
-  console.log(`[vendor] ${src.name}: ${src.from} → ${dest} (${(size / 1e6).toFixed(1)} MB)`);
+  console.log(
+    `[vendor] ${src.name}: ${src.from} → ${dest} (${(size / 1e6).toFixed(1)} MB` +
+      `${pruned ? `, -${(pruned / 1e6).toFixed(1)} MB pruned` : ""})`
+  );
 }
 
 // Tesseract needs the language data it will actually be asked for.

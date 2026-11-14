@@ -1,5 +1,8 @@
 name: Release Desktop
 
+# Windows-only on purpose: the sidecar is a PyInstaller --onedir Windows build, the bundled
+# Ghostscript/Tesseract/Poppler are Windows binaries, and the shell uses taskkill/explorer/
+# MessageBoxW. macOS/Linux would be a separate port, not a matrix entry.
 on:
   push:
     tags:
@@ -10,14 +13,8 @@ permissions:
 
 jobs:
   release:
-    name: Build & publish installer
+    name: Build, sign & publish installer
     runs-on: windows-latest
-    env:
-      # Code signing is opt-in: add CSC_LINK (base64 .pfx) and CSC_KEY_PASSWORD as repo
-      # secrets and electron-builder signs every artifact automatically. Empty values make
-      # the builder skip signing (v1 ships unsigned; SmartScreen then warns on first run).
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,6 +37,16 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
 
       - name: Pin npm to the lockfile's toolchain
         run: npm i -g npm@11.6.1
@@ -92,12 +99,16 @@ jobs:
           "YOURPDF_TESSERACT=$tess" | Out-File -FilePath $env:GITHUB_ENV -Append
           "YOURPDF_PYTHON=$((Get-Command python).Source)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Check release tag matches package version
+      - name: Check release tag matches both version files
         shell: pwsh
         run: |
-          $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
-          if ("v$version" -ne $env:GITHUB_REF_NAME) {
-            throw "Tag $env:GITHUB_REF_NAME does not match desktop/package.json version $version"
+          # tauri.conf.json drives the updater's version comparison; package.json stays the
+          # human-facing one. They must agree or an update can be offered forever.
+          $pkg = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          $tauri = (Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($pkg -ne $tauri) { throw "version mismatch: package.json=$pkg tauri.conf.json=$tauri" }
+          if ("v$pkg" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match version $pkg"
           }
 
       - name: Install frontend dependencies
@@ -108,22 +119,47 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Build release bundle
+      - name: Freeze the sidecar
         working-directory: desktop
-        run: npm run dist
+        run: npm run build:sidecar
+
+      - name: Vendor native binaries (pruned)
+        working-directory: desktop
+        run: npm run vendor
+
+      - name: Build, sign and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ed25519 (minisign) key used by the updater. NOT Authenticode: SmartScreen
+          # still warns on install until a code-signing certificate exists.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "YourPDF Desktop ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+          # Generates latest.json (with the .sig for each platform bundle) in the release,
+          # which is exactly what plugins.updater.endpoints points at.
+          includeUpdaterJson: true
+          # No --target: the runner is already x86_64-pc-windows-msvc, and adding it would
+          # move output to target/<triple>/release, breaking the smoke/prepare paths below.
 
       - name: Smoke test the packaged build
-        # Non-blocking on purpose: Electron on a headless runner is the kind of thing that goes
-        # flaky, and a flaky gate must never block a release. Flip to blocking once it has run
-        # green on a few tags.
+        # Non-blocking on purpose: a GUI app on a headless runner is exactly the kind of thing
+        # that goes flaky, and a flaky gate must never block a release. Flip to blocking once
+        # it has run green on a few tags.
         continue-on-error: true
         shell: pwsh
         working-directory: desktop
         run: |
-          $exe = "release/win-unpacked/YourPDF Desktop.exe"
+          $exe = 'src-tauri/target/release/yourpdf-desktop.exe'
           if (-not (Test-Path $exe)) { throw "Missing $exe" }
 
-          $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9225' -PassThru
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9225'
+          $app = Start-Process -FilePath $exe -PassThru
           try {
             $ready = $false
             for ($i = 0; $i -lt 60; $i++) {
@@ -135,42 +171,47 @@ jobs:
               } catch { }
             }
             if (-not $ready) { throw 'App did not expose a debug port within 120s' }
-            npm run smoke
+            $env:CDP_PORT = '9225'
+            node scripts/smoke.mjs
             if ($LASTEXITCODE -ne 0) { throw "Smoke test failed (exit $LASTEXITCODE)" }
           } finally {
-            Get-Process -Name 'YourPDF Desktop' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Get-Process -Name 'yourpdf-desktop' -ErrorAction SilentlyContinue | Stop-Process -Force
           }
 
-      - name: Verify bundle
+      - name: Prepare stable-name assets
         shell: pwsh
         working-directory: desktop
         run: |
+          # docs/install.md promises a version-independent one-liner that fetches
+          # .../releases/latest/download/install.ps1 and YourPDF-Desktop-setup.exe, so the
+          # versioned Tauri installer must also be published under the stable name.
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $required = @(
-            "release/YourPDF-Desktop-${version}-setup.exe",
-            "release/YourPDF-Desktop-${version}-setup.exe.blockmap",
-            'release/YourPDF-Desktop-setup.exe',
-            'release/latest.yml',
-            'release/SHA256SUMS.txt',
-            'release/install.ps1',
-            'release/install.cmd',
-            'release/INSTALL.txt'
-          )
-          foreach ($file in $required) {
-            if (-not (Test-Path $file)) { throw "Missing release asset: $file" }
-          }
+          $built = Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe' |
+            Select-Object -First 1
+          if (-not $built) { throw 'No NSIS installer produced' }
 
-      - name: Publish GitHub Release
+          $stable = 'release-assets'
+          New-Item -ItemType Directory -Path $stable -Force | Out-Null
+          Copy-Item $built.FullName (Join-Path $stable 'YourPDF-Desktop-setup.exe')
+          Copy-Item $built.FullName (Join-Path $stable "YourPDF-Desktop-$version-setup.exe")
+          Copy-Item 'installer/install.ps1' $stable
+          Copy-Item 'installer/install.cmd' $stable
+          Copy-Item 'installer/INSTALL.txt' $stable
+
+          $lines = Get-ChildItem $stable -Filter '*-setup.exe' | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          }
+          $lines | Set-Content (Join-Path $stable 'SHA256SUMS.txt')
+          Get-ChildItem $stable | Select-Object Name, Length
+
+      - name: Publish stable-name assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            desktop/release/YourPDF-Desktop-setup.exe
-            desktop/release/YourPDF-Desktop-*-setup.exe
-            desktop/release/YourPDF-Desktop-*-setup.exe.blockmap
-            desktop/release/latest.yml
-            desktop/release/SHA256SUMS.txt
-            desktop/release/install.ps1
-            desktop/release/install.cmd
-            desktop/release/INSTALL.txt
-          generate_release_notes: true
+            desktop/release-assets/YourPDF-Desktop-setup.exe
+            desktop/release-assets/YourPDF-Desktop-*-setup.exe
+            desktop/release-assets/SHA256SUMS.txt
+            desktop/release-assets/install.ps1
+            desktop/release-assets/install.cmd
+            desktop/release-assets/INSTALL.txt
           fail_on_unmatched_files: true

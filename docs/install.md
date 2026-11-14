@@ -1,13 +1,13 @@
 # Install YourPDF Desktop
 
 Windows 10/11 x64. Per-user install — no administrator rights, no account, no
-uploads. The full toolkit (Electron shell + FastAPI sidecar + Ghostscript,
+uploads. The full toolkit (Tauri shell + FastAPI sidecar + Ghostscript,
 Tesseract, Poppler) is bundled.
 
 ## Download and install (one click)
 
 1. Open **https://github.com/unknown-spec10/YourPDF/releases/latest**
-2. Click **`YourPDF-Desktop-setup.exe`** (~300 MB) under *Assets*.
+2. Click **`YourPDF-Desktop-setup.exe`** (~130 MB) under *Assets*.
 3. Double-click the downloaded file. It installs and launches — no wizard, no
    admin prompt, no options to click through.
 
@@ -56,7 +56,7 @@ Download these files from the release page into one folder, then double-click
 
 | File | Purpose |
 |---|---|
-| `YourPDF-Desktop-setup.exe` | The installer (about 300 MB) |
+| `YourPDF-Desktop-setup.exe` | The installer (about 130 MB) |
 | `SHA256SUMS.txt` | SHA-256 of the installer |
 | `install.ps1` / `install.cmd` | Verifies and installs locally |
 
@@ -70,8 +70,8 @@ version exists it downloads in the background, then asks to restart — your set
 history and chosen folder are untouched. You can also trigger a check yourself from
 **Help → Check for Updates…** (it tells you either "You're up to date" or offers the download).
 
-Downloads are incremental: only the changed blocks are fetched (the `.blockmap` asset), so an
-update is much smaller than the 300 MB installer.
+Downloading an update fetches the full signed installer — there is no incremental
+patch format — so an update is roughly the size of a fresh install.
 
 To update by hand instead, re-run the one-click download above — installing over an existing copy
 keeps your settings.

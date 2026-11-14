@@ -24,12 +24,26 @@ app.add_middleware(
     allow_credentials=bool(_cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
+    # The desktop shell can run the UI on its own origin (Tauri serves it from
+    # http://tauri.localhost) while the API answers on a loopback port. Cross-origin
+    # JS cannot read these unless they are explicitly exposed, and without them the
+    # client cannot name the downloaded file or show the job notice.
+    expose_headers=["Content-Disposition", "X-Job-Notice", "X-OCR-Applied"],
 )
 
-# Mount local static outputs directory for file download fallback
+# Mount local static outputs directory for file download fallback.
+# In the desktop build `backend_root` is inside the install tree — never write there.
+# Use the runtime tmp dir the shell provides, and keep backend/static for tests and
+# plain-browser runs (where YOURPDF_TMP is unset). Writing into the install dir also
+# left empty directories behind after uninstall.
 app_dir = os.path.dirname(os.path.abspath(__file__))
 backend_root = os.path.dirname(app_dir)
-static_dir = os.path.join(backend_root, "static")
+_runtime_tmp = os.environ.get("YOURPDF_TMP")
+static_dir = (
+    os.path.join(_runtime_tmp, "static")
+    if _runtime_tmp
+    else os.path.join(backend_root, "static")
+)
 os.makedirs(os.path.join(static_dir, "outputs"), exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 

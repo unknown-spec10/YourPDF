@@ -36,14 +36,21 @@ const args = [
   "ocrmypdf",
   "--copy-metadata",
   "pikepdf",
-  // ocrmypdf pulls in cv2/numpy as transitive deps, but pdf2docx (imported at startup by
-  // app/tasks/pdf_tasks.py) imports cv2, numpy and fitz at module load — those must stay.
-  // Only Tcl/Tk (pdf2docx's optional GUI, never imported) is dead weight here.
+  // ocrmypdf pulls in cv2/numpy as transitive deps, and pdf2docx (imported at startup by
+  // app/tasks/pdf_tasks.py) imports cv2, numpy and fitz at module load. All three MUST stay —
+  // pdf2docx uses cv2 for layout/table detection, which is the "layout is preserved" promise on
+  // the PDF-to-Word page. Only genuinely unreachable payloads are removed (see PRUNE below).
   "--exclude-module", "tkinter",
   "--exclude-module", "_tkinter",
   "--exclude-module", "Tkinter",
   "--exclude-module", "tcl",
   "--exclude-module", "tk",
+  // AVIF is not an accepted input format anywhere (validation allows jpg/png/webp/bmp/tiff/gif/svg),
+  // so Pillow's AVIF decoder and the standalone pdfium binding are unreachable at runtime.
+  "--exclude-module", "PIL.AvifImagePlugin",
+  "--exclude-module", "PIL._avif",
+  "--exclude-module", "pypdfium2",
+  "--exclude-module", "pypdfium2_raw",
   "--distpath",
   out,
   "--workpath",
@@ -66,6 +73,47 @@ if (!fs.existsSync(exe)) {
   process.exit(1);
 }
 
+const root = path.join(out, "yourpdf-backend");
+
+// Post-build payload removals. Declared as data so a PyInstaller upgrade that starts collecting
+// these again shows up in the build log instead of silently re-growing the installer.
+// Verified quality-neutral:
+//  - cv2's videoio ffmpeg plugin: pdf2docx only processes page raster, never video. Core cv2.pyd
+//    stays. Probe: a PDF with a 2x3 table still converted to 1 table / 6 cells without it.
+//  - pypdfium2: not imported anywhere in backend/ or desktop/.
+//  - PIL/_avif: AVIF is not an accepted input format (see validation allowlists).
+const PRUNE = [
+  { match: /^cv2[\\/]opencv_videoio_ffmpeg.*\.dll$/i, why: "opencv video plugin, unused by pdf2docx" },
+  { match: /^pypdfium2[\\/]/i, why: "pypdfium2 not imported" },
+  { match: /^PIL[\\/]_avif.*\.pyd$/i, why: "AVIF not an accepted input" },
+  { match: /^PIL[\\/]_avif.*\.dll$/i, why: "AVIF not an accepted input" },
+];
+
+function prune(dir, prefix = "") {
+  let freed = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      freed += prune(full, rel);
+      try {
+        if (fs.readdirSync(full).length === 0) fs.rmdirSync(full);
+      } catch {
+        /* keep going */
+      }
+      continue;
+    }
+    const hit = PRUNE.find((p) => p.match.test(rel.replace(/^_internal\//, "")));
+    if (hit) {
+      const size = fs.statSync(full).size;
+      fs.rmSync(full, { force: true });
+      console.log(`[build-sidecar] pruned ${rel} (${(size / 1e6).toFixed(1)} MB) — ${hit.why}`);
+      freed += size;
+    }
+  }
+  return freed;
+}
+
 const mb = (dir) => {
   let total = 0;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -75,4 +123,11 @@ const mb = (dir) => {
   return total;
 };
 
-console.log(`[build-sidecar] done → ${exe} (${(mb(path.join(out, "yourpdf-backend")) / 1e6).toFixed(1)} MB)`);
+const before = mb(root);
+const freed = prune(root);
+const after = mb(root);
+
+console.log(
+  `[build-sidecar] done → ${exe} (${(after / 1e6).toFixed(1)} MB, ` +
+    `${(before / 1e6).toFixed(1)} MB before pruning, -${(freed / 1e6).toFixed(1)} MB)`
+);

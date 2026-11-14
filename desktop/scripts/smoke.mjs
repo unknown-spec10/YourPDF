@@ -1,7 +1,9 @@
 // Packaged-build smoke test: every tool endpoint + the cancel path, driven from inside the
-// running app so Electron's session-level token applies exactly as it does for the UI.
+// running app so the real request path applies (the API origin and per-launch token are
+// injected as window globals).
 //
-//   npm run smoke            (app must already be running with --remote-debugging-port=9225)
+//   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9225 <app>.exe
+//   npm run smoke
 //   CDP_PORT=9226 npm run smoke
 //
 // Fixtures come from desktop/fixtures (png, jpg, docx, pptx). The PDF fixture is built by the
@@ -72,6 +74,12 @@ const page = browser.contexts()[0].pages()[0];
 
 const result = await page.evaluate(
   async ({ materials, cases }) => {
+    // The UI is served from the Tauri origin, so the API base and token come from the
+    // injected globals rather than being same-origin relative paths.
+    const base = window.__YOURPDF_API__ || "";
+    const token = window.__YOURPDF_TOKEN__ || "";
+    const H = token ? { "X-YourPDF-Token": token } : {};
+
     const TYPES = {
       pdf: "application/pdf",
       png: "image/png",
@@ -95,13 +103,13 @@ const result = await page.evaluate(
     const seed = new FormData();
     seed.append("files", mk("png", materials.png));
     seed.append("files", mk("jpg", materials.jpg));
-    const seeded = await fetch("/api/v1/images-to-pdf", { method: "POST", body: seed });
+    const seeded = await fetch(`${base}/api/v1/images-to-pdf`, { method: "POST", body: seed, headers: H });
     if (!seeded.ok) return { fatal: `images-to-pdf seed failed (${seeded.status})` };
     const pdfB64 = toB64(await seeded.arrayBuffer());
 
     const post = async (path, fd) => {
       const t0 = performance.now();
-      const res = await fetch(path, { method: "POST", body: fd });
+      const res = await fetch(base + path, { method: "POST", body: fd, headers: H });
       const type = (res.headers.get("content-type") || "").split(";")[0];
       let bytes = 0;
       let detail = "";
@@ -134,7 +142,7 @@ const result = await page.evaluate(
       const p1 = new FormData();
       p1.append("password", "test1234");
       p1.append("file", mk("pdf", pdfB64));
-      const prot = await fetch("/api/v1/protect", { method: "POST", body: p1 });
+      const prot = await fetch(`${base}/api/v1/protect`, { method: "POST", body: p1, headers: H });
       const blob = await prot.blob();
       const p2 = new FormData();
       p2.append("password", "test1234");
@@ -150,10 +158,10 @@ const result = await page.evaluate(
       const cfd = new FormData();
       cfd.append("file", mk("pdf", pdfB64));
       const t0 = performance.now();
-      const ocr = fetch("/api/v1/ocr", { method: "POST", body: cfd });
+      const ocr = fetch(`${base}/api/v1/ocr`, { method: "POST", body: cfd, headers: H });
       await new Promise((r) => setTimeout(r, 1200));
       const c0 = performance.now();
-      const res = await fetch("/api/v1/cancel", { method: "POST" });
+      const res = await fetch(`${base}/api/v1/cancel`, { method: "POST", headers: H });
       const body = await res.text();
       const cancelMs = Math.round(performance.now() - c0);
       let outcome = "pending";
@@ -166,7 +174,7 @@ const result = await page.evaluate(
       } catch (e) {
         outcome = String(e.message || e);
       }
-      const health = await fetch("/health").then((r) => r.status).catch(() => 0);
+      const health = await fetch(`${base}/health`, { headers: H }).then((r) => r.status).catch(() => 0);
       cancel = { status: res.status, body, cancelMs, outcome, health, totalMs: Math.round(performance.now() - t0) };
     } catch (e) {
       cancel = { error: String(e) };

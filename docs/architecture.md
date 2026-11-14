@@ -1,11 +1,10 @@
 # YourPDF Desktop — Architecture (As Built)
 
-> The app is a Windows desktop build: an Electron shell spawns a local FastAPI
-> sidecar that serves both the UI and the API from the same loopback origin.
-> All processing runs locally and synchronously. The browser-window equivalent —
-> the Electron renderer — only uploads files and downloads results. Privacy comes
-> from locality plus best-effort immediate cleanup of every upload and temp output.
-> There is no hosted deployment; the Cloud Run services are retired.
+> The app is a Windows desktop build: a Tauri shell spawns a local FastAPI sidecar
+> and serves the UI itself; all processing runs locally and synchronously. The
+> webview only uploads files and downloads results. Privacy comes from locality plus
+> best-effort immediate cleanup of every upload and temp output. There is no hosted
+> deployment; the Cloud Run services were removed (deleted October 2026).
 
 **Status:** Built and shipping. This document describes the code as it exists, not a plan.
 
@@ -14,37 +13,42 @@
 | Layer | Choice |
 |---|---|
 | Frontend | Next.js 16 App Router, TypeScript, Tailwind CSS, Framer Motion, react-dropzone, Zustand, Axios; static export (`output: "export"`, `trailingSlash: true`, `images.unoptimized`) |
-| Desktop shell | Electron (`desktop/shell/main.js`, `desktop/shell/preload.js`); NSIS per-user installer via `electron-builder` |
-| Sidecar | Frozen FastAPI via PyInstaller `--onedir` (`desktop/sidecar/serve.py` → `yourpdf-backend.exe`); serves static export at `/` and API at `/api` + `/api/v1` |
+| Desktop shell | Tauri v2 (`desktop/src-tauri/` — Rust core + `bridge.js` init script); NSIS per-user installer; tag-driven CI with updater signing |
+| Sidecar | Frozen FastAPI via PyInstaller `--onedir` (`desktop/sidecar/serve.py` → `yourpdf-backend.exe`); serves the API at `/api` + `/api/v1` (and optionally the export at `/` when `YOURPDF_SERVE_STATIC=1`) |
 | Backend | Python 3.12, FastAPI (Uvicorn), pypdf + pikepdf + Ghostscript + Pillow + img2pdf + pdf2image + pdf2docx + reportlab + python-docx + python-pptx + ocrmypdf/Tesseract |
 | Job queue | None — fully synchronous, no Celery, no Redis, no Flower, no polling |
 | Storage | Local ephemeral processing (app tmp dir); no database; outputs returned as direct byte responses |
 | Native binaries | Bundled under `desktop/bin/` (Ghostscript, Tesseract, Poppler); `PATH` + `TESSDATA_PREFIX` set by the shell |
 | Distribution | Desktop installer only — no containers, no proxy, no hosted deployment |
 
-## 2. Desktop runtime: Electron → local FastAPI → bundled binaries
+## 2. Desktop runtime: Tauri → local FastAPI → bundled binaries
 
 ```
-Electron main (desktop/shell/main.js)
-  1. generates random per-launch token (crypto.randomBytes, base64url)
-  2. spawns sidecar: packaged → resources/sidecar/yourpdf-backend.exe
-                      dev       → $YOURPDF_PYTHON (or myenv) + desktop/sidecar/serve.py
-     env: YOURPDF_TOKEN, YOURPDF_TMP (= userData/tmp),
-          YOURPDF_OUT (= resources/frontend, or frontend/out in dev),
+Tauri core (desktop/src-tauri/src/lib.rs)
+  1. generates a random per-launch token (rand, 32 alphanumeric chars)
+  2. spawns sidecar: packaged → resources/sidecar/yourpdf-backend/yourpdf-backend.exe
+                      dev      → $YOURPDF_PYTHON (or myenv) + desktop/sidecar/serve.py
+     env: YOURPDF_TOKEN, YOURPDF_TMP (= app-local-data/tmp),
+          YOURPDF_SERVE_STATIC=0 (the shell serves the export, not the sidecar),
+          CORS_ORIGINS=http://tauri.localhost,
           PATH += bin/{gs,tesseract,poppler}, TESSDATA_PREFIX
-  3. waits for `YOURPDF_PORT <port>` on sidecar stdout (60 s timeout)
-  4. creates BrowserWindow → loads http://127.0.0.1:<port>/
-     injects X-YourPDF-Token on every request at the session level
-     (webRequest.onBeforeSendHeaders — the page never carries the token)
+  3. waits for `YOURPDF_PORT <port>` on sidecar stdout (60 s timeout), then KEEPS
+     draining stdout — closing the pipe breaks the sidecar's next print(flush=True)
+  4. creates the window on the Tauri origin (static export), injecting
+     window.__YOURPDF_API__ + window.__YOURPDF_TOKEN__ before any page script runs
   5. on quit: tree-kills the sidecar (taskkill /PID /T /F — child.kill()
      would orphan gs/tesseract/soffice grandchildren holding tmp locks)
 ```
 
 The sidecar (`desktop/sidecar/serve.py`, additive — nothing in `backend/` is modified):
 
-- Mounts the static export (`StaticFiles(OUT_DIR, html=True)`) at `/`, after the
-  API routes, so frontend and API are same-origin: no CORS, relative API base
-  (`NEXT_PUBLIC_API_URL=""` at export build time), no API key.
+- Serves the API at `/api` + `/api/v1`. With `YOURPDF_SERVE_STATIC=1` it also mounts the
+  static export (`StaticFiles(OUT_DIR, html=True)`) at `/`, after the API routes, which is
+  handy for a plain-browser session. The desktop shell sets `YOURPDF_SERVE_STATIC=0` because
+  it serves the export itself, so the UI origin is `http://tauri.localhost` and the API is
+  cross-origin: the backend's CORS allow-list is set to that origin, and it exposes
+  `Content-Disposition`, `X-Job-Notice` and `X-OCR-Applied` (cross-origin JS cannot read
+  those headers otherwise).
 - Adds `LoopbackTokenMiddleware` (pure ASGI): every non-GET/HEAD API request must
   present the per-launch `X-YourPDF-Token` (with a `?t=` query fallback); static
   assets, `/_next/`, fonts, favicon/icons, `/health`, and
@@ -63,12 +67,14 @@ The sidecar (`desktop/sidecar/serve.py`, additive — nothing in `backend/` is m
 - Prunes `upload_*`/`output_*` tmp debris at startup; the shell also wipes the
   tmp dir on launch (crash debris holds file locks).
 
-Downloads: tool result cards link to `blob:` URLs with no `download` attribute.
-Electron's own `downloadURL` path reports success and writes nothing for those,
-so `desktop/shell/preload.js` intercepts `blob:` anchor clicks, fetches the
-bytes, and hands them over IPC (`save-blob`); the main process writes the file
-to the user's Downloads folder. `will-navigate` on `blob:` is blocked so a blob
-can never replace the app; external `http(s)` links open in the system browser.
+Downloads: tool result cards link to `blob:` URLs with no `download` attribute, and the
+webview's own download path reports success while writing nothing. `src-tauri/src/bridge.js`
+is injected into every window before page scripts: it intercepts `blob:` anchor clicks,
+fetches the bytes, and invokes `save_blob` with the bytes as the **raw invoke body**
+(metadata rides in headers — a JSON array would balloon a 30 MB file into ~100 MB of text).
+Rust writes the file to the user's Downloads folder, records it in `downloads.json`,
+broadcasts `yourpdf:saved`, and shows a notification. External `http(s)` links open in the
+system browser.
 
 Single-instance lock: a second launch focuses the existing window.
 
@@ -103,7 +109,7 @@ app/
 ├── pdf_security.py    # protect_pdf_bytes / unlock_pdf_bytes (pypdf, in-memory)
 ├── routers/
 │   ├── pdf.py         # /compress /merge (plan) /split /pdf-to-images (pages) /images-to-pdf
-│   │                  # /extract-text (layout) /pdf-to-docx (pdf2docx) /docx-to-pdf
+│   │                  # /extract-text (layout) /pdf-to-docx (pdf2docx; scans OCR'd) /docx-to-pdf
 │   │                  # /protect /unlock (in-memory) /rotate (any angle) /organize
 │   │                  # /watermark (per-page) /sign (file, signature, pages, cx, cy, width, rotation, add_date)
 │   │                  # /add-page-numbers /ocr /pdf-info
@@ -168,7 +174,7 @@ app/
 
 ## 9. Distribution topologies
 
-- Packaged app (only distribution): Electron + frozen sidecar + `frontend/out` + `desktop/bin/` + `desktop/licenses/`, installed per-user via NSIS. Logs: `%APPDATA%\YourPDF Desktop\logs`; tmp: `%APPDATA%\YourPDF Desktop\tmp`.
+- Packaged app (only distribution): Tauri shell + frozen sidecar + `desktop/bin/` + `desktop/licenses/`, installed per-user via NSIS. Logs: `%LOCALAPPDATA%\com.yourpdf.desktop\logs`; tmp: `%LOCALAPPDATA%\com.yourpdf.desktop\tmp`.
 - Local dev: backend `uvicorn` on 8000 + frontend `npm run dev -- --webpack` on 3000, all on the host; or full shell via `npm start` in `desktop/` against `frontend/out`. No compose services, no containers.
 
 Build and smoke-test steps: `docs/desktop-build.md`.

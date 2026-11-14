@@ -59,14 +59,14 @@ jobs:
       - name: Vendor Poppler
         shell: pwsh
         run: |
-          $release = Invoke-RestMethod `
-            -Uri 'https://api.github.com/repos/oschwartz10612/poppler-windows/releases/latest' `
-            -Headers @{ 'User-Agent' = 'yourpdf-ci' }
-          $asset = $release.assets | Where-Object { $_.name -match '^Release-.*\.zip$' } |
-            Select-Object -First 1
-          if (-not $asset) { throw 'No Poppler release zip found' }
+          # Pinned on purpose. This used the unauthenticated releases API, which shares a
+          # 60-requests/hour limit across runner IPs (it failed a release with "API rate
+          # limit exceeded"), and "latest" also vendored a different Poppler than the one
+          # the build was tested against. Bump $version deliberately.
+          $version = '26.02.0-0'
+          $url = "https://github.com/oschwartz10612/poppler-windows/releases/download/v$version/Release-$version.zip"
 
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile poppler.zip
+          Invoke-WebRequest -Uri $url -OutFile poppler.zip
           Expand-Archive poppler.zip -DestinationPath C:\poppler
           $root = Get-ChildItem C:\poppler -Directory | Select-Object -First 1
           "YOURPDF_POPPLER=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append

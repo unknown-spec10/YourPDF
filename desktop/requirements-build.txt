@@ -3,6 +3,12 @@
 # desktop-build-only. local venv versions are pinned here so releases are repeatable.
 -r ../backend/requirements.txt
 
+# pypdf 7 removed PageObject.replace_contents() for pages that are not attached to a
+# writer, which the sign, watermark and add-page-numbers tasks rely on. Pin to the
+# version this suite and the shipped sidecar were validated against until those tasks
+# are ported to the writer-based API.
+pypdf==6.13.0
+
 # OCR runtime that the frozen sidecar dispatches into.
 ocrmypdf==17.13.0
 

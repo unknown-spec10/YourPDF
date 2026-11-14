@@ -1,6 +1,8 @@
-# Python packages needed to freeze the desktop sidecar on a build machine.
-# Runtime set matches backend/requirements.txt (the Floor file); the two extras are
-# desktop-build-only. local venv versions are pinned here so releases are repeatable.
+# Human-readable floor set for provisioning a fresh dev venv that can freeze the sidecar.
+# CI does NOT install this file: it installs requirements-build.lock (a full freeze of the
+# venv the release was validated against), so a tagged build matches the tested binary and
+# its size. Provision from here, then regenerate the lock from the venv (keeping its header):
+#   myenv\Scripts\python.exe -m pip freeze
 -r ../backend/requirements.txt
 
 # pypdf 7 removed PageObject.replace_contents() for pages that are not attached to a

@@ -12,11 +12,29 @@ binaries) on loopback.
 - Backend venv at repo-root `../myenv` (or set `YOURPDF_PYTHON` to any venv
   python with the build deps installed):
   `pip install -r desktop/requirements-build.txt` — backend runtime set plus
-  pinned `ocrmypdf` and `PyInstaller`
+  `ocrmypdf` and `PyInstaller`
 - Native installs for vendoring (override with env vars, see §4):
   Ghostscript (`YOURPDF_GS`, default `D:/gs10.05.1`), Tesseract
   (`YOURPDF_TESSERACT`, default `C:/Program Files/Tesseract-OCR`), Poppler
   (`YOURPDF_POPPLER`, default `D:/poppler-26.02.0`)
+
+**Releases are pinned, and CI uses the pins.** Two files decide what a tag builds:
+
+| File | Role |
+|---|---|
+| `desktop/requirements-build.lock` | full freeze of the venv the release was validated against; **CI installs this** |
+| `desktop/requirements-build.txt` | human floor set, for provisioning a fresh venv before regenerating the lock |
+
+`requirements-build.txt` alone is *not* what CI installs — doing that once resolved
+newer `numpy`/`opencv`/`pymupdf` on the runner and produced a 294 MB sidecar next to the
+224 MB one that had actually been tested. Bump deliberately: update the venv, re-run
+`myenv\Scripts\python.exe -m pip freeze`, run the suite, commit the lock.
+
+The native tools are pinned the same way in the workflow: Ghostscript **10.05.1** from
+Artifex's own installer (`/S /D=C:\gs`, asserted with `-version`) and Tesseract
+**5.5.0.20241111** (`choco --version`). Chocolatey's unpinned `ghostscript` gave CI
+10.08.0 — different rendering and a different bundled size, with no commit to review.
+Poppler is pinned by URL (§ Vendor Poppler).
 
 ## 2. Build the installer
 

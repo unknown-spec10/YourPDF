@@ -115,6 +115,7 @@ export default function PdfToDocxPage() {
     reset,
     downloadUrl,
     fileName,
+    notice,
   } = useFileJob<File>(pdfToDocxSubmitter)
 
   const handleSubmit = async () => {
@@ -285,6 +286,11 @@ export default function PdfToDocxPage() {
                   <p className="text-sm text-muted mt-1">
                     Your Word document is ready. Click the button below to download.
                   </p>
+                  {notice && (
+                    <p className="mt-3 max-w-md rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs leading-relaxed text-warning">
+                      {notice}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mt-2 w-full max-w-full justify-center items-stretch sm:items-center">
                   <a

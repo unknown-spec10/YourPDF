@@ -17,6 +17,7 @@ import subprocess
 import sys
 import uuid
 import zipfile
+from typing import NamedTuple
 
 import img2pdf
 from fastapi import HTTPException
@@ -68,6 +69,28 @@ def _ocrmypdf_argv() -> list[str]:
     if getattr(sys, "frozen", False):
         return [sys.executable, "-m", "ocrmypdf"]
     return ["ocrmypdf"]
+
+
+def _run_ocrmypdf(input_path: str, output_path: str, language: str = "eng") -> None:
+    """Run ocrmypdf on ``input_path`` into ``output_path`` and require the output file."""
+    cmd = [*_ocrmypdf_argv(), "--skip-text", "-l", language, input_path, output_path]
+    logger.info(f"Running OCR command: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT)
+    except FileNotFoundError:
+        logger.error(f"OCR could not run: argv={cmd!r}, executable={sys.executable!r}")
+        raise
+
+    # ocrmypdf can log a fatal error and still exit 0 when it is dispatched in-process
+    # (frozen desktop build), so the exit code alone is not trustworthy: require output.
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()
+        logger.error(f"OCR command failed (code {proc.returncode}): {tail[-2000:]}")
+        raise Exception(_ocr_error_summary(tail))
+    if not os.path.exists(output_path):
+        tail = (proc.stderr or proc.stdout or "").strip()
+        logger.error(f"OCR produced no output file. ocrmypdf said: {tail[-2000:]}")
+        raise Exception(_ocr_error_summary(tail))
 
 
 def _download_name(original_filename: str | None, fallback: str, build) -> str:
@@ -822,8 +845,64 @@ def extract_text_task(
         cleanup_paths(file_path, output_path)
 
 
-def pdf_to_docx_task(file_path: str, original_filename: str = None) -> tuple[bytes, str]:
-    """Convert a PDF to DOCX and return the bytes."""
+class PdfToDocxResult(NamedTuple):
+    data: bytes
+    download_name: str
+    ocr_applied: bool
+    notice: str | None
+
+
+def _page_text_flags(page) -> tuple[bool, bool]:
+    """Return ``(displayed, hidden)`` for one PyMuPDF page."""
+    try:
+        spans = page.get_texttrace()
+    except Exception:
+        # Malformed fonts can break span introspection; fall back to plain extraction.
+        return bool(page.get_text().strip()), False
+    return (
+        any(span.get("type") != 3 for span in spans),
+        any(span.get("type") == 3 for span in spans),
+    )
+
+
+def _pdf_text_layout(file_path: str) -> str:
+    """Classify a PDF's text layer as ``digital``, ``ocr``, ``scan`` or ``mixed``.
+
+    Every page with displayed (non-invisible) text is ``digital``; a page with only
+    invisible text has an OCR layer; a page with neither is a raw scan.
+    """
+    import fitz
+
+    try:
+        with fitz.open(file_path) as doc:
+            total = doc.page_count
+            displayed = 0
+            hidden = 0
+            for page in doc:
+                page_displayed, page_hidden = _page_text_flags(page)
+                displayed += page_displayed
+                hidden += page_hidden
+    except Exception as e:
+        logger.warning(f"Could not inspect the text layer of {file_path}: {e}")
+        return "digital"
+
+    if total == 0 or displayed == total:
+        return "digital"
+    if displayed == 0:
+        return "ocr" if hidden else "scan"
+    return "mixed"
+
+
+def _docx_has_text(file_path: str) -> bool:
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    body = Document(file_path).element.body
+    return any(t.text.strip() for t in body.iter(qn("w:t")) if t.text)
+
+
+def pdf_to_docx_task(file_path: str, original_filename: str = None) -> PdfToDocxResult:
+    """Convert a PDF to DOCX, OCR-ing scans and honouring an existing OCR layer."""
     logger.info(f"Starting PDF to DOCX task for {file_path}")
 
     file_path = resolve_path(file_path)
@@ -834,22 +913,80 @@ def pdf_to_docx_task(file_path: str, original_filename: str = None) -> tuple[byt
     output_dir = os.path.dirname(file_path)
     output_filename = f"converted_{uuid.uuid4()}.docx"
     output_path = os.path.join(output_dir, output_filename)
+    ocr_path = None
 
     try:
-        cv = Converter(file_path)
-        cv.convert(output_path, start=0, end=None)
-        cv.close()
+        layout = _pdf_text_layout(file_path)
+        ocr_applied = False
+        notice = None
+        source_path = file_path
+        ocr_mode = 0
+
+        if layout == "ocr":
+            # The text is already there, just invisible: extract it instead of the image.
+            ocr_mode = 2
+        elif layout == "scan":
+            ocr_path = os.path.join(output_dir, f"ocr_{uuid.uuid4()}.pdf")
+            try:
+                _run_ocrmypdf(file_path, ocr_path)
+            except FileNotFoundError as e:
+                logger.error(f"OCR could not run for {file_path}: {e!r}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "OCR is required to convert this scanned PDF, but the OCR tool "
+                        "could not be started on this machine."
+                    ),
+                ) from e
+            except subprocess.TimeoutExpired as e:
+                logger.error("OCR timed out after %s seconds", SUBPROCESS_TIMEOUT)
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "OCR timed out while converting this scanned PDF. Try again, or "
+                        "run it through the OCR tool first."
+                    ),
+                ) from e
+            source_path = ocr_path
+            ocr_mode = 2
+            ocr_applied = True
+            notice = (
+                "This PDF had no text layer, so we ran OCR automatically. The Word file "
+                "contains the recognized text only; the scanned page images are not included."
+            )
+        elif layout == "mixed":
+            notice = (
+                "Some pages had no readable text, so they are kept as page images in the "
+                "Word file."
+            )
+
+        cv = Converter(source_path)
+        try:
+            cv.convert(output_path, start=0, end=None, ocr=ocr_mode)
+        finally:
+            cv.close()
+
+        if not _docx_has_text(output_path):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "This PDF looks like a scan and we could not read any text from it. "
+                    "Try a clearer scan, or run it through the OCR tool first."
+                ),
+            )
 
         data = read_bytes(output_path)
         download_name = _download_name(
             original_filename, output_filename, lambda base, ext: f"{base}.docx"
         )
-        return data, download_name
+        return PdfToDocxResult(data, download_name, ocr_applied, notice)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"PDF to DOCX conversion failed: {e}")
         raise e
     finally:
-        cleanup_paths(file_path, output_path)
+        cleanup_paths(file_path, output_path, ocr_path)
 
 
 def docx_to_pdf_task(file_path: str, original_filename: str = None) -> tuple[bytes, str]:
@@ -1403,22 +1540,8 @@ def ocr_pdf_task(file_path: str, language: str = "eng", original_filename: str =
     output_filename = f"ocr_{uuid.uuid4()}.pdf"
     output_path = os.path.join(output_dir, output_filename)
 
-    cmd: list[str] = []
     try:
-        cmd = [*_ocrmypdf_argv(), "--skip-text", "-l", language, file_path, output_path]
-        logger.info(f"Running OCR command: {' '.join(cmd)}")
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT)
-
-        # ocrmypdf can log a fatal error and still exit 0 when it is dispatched in-process
-        # (frozen desktop build), so the exit code alone is not trustworthy: require output.
-        if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "").strip()
-            logger.error(f"OCR command failed (code {proc.returncode}): {tail[-2000:]}")
-            raise Exception(_ocr_error_summary(tail))
-        if not os.path.exists(output_path):
-            tail = (proc.stderr or proc.stdout or "").strip()
-            logger.error(f"OCR produced no output file. ocrmypdf said: {tail[-2000:]}")
-            raise Exception(_ocr_error_summary(tail))
+        _run_ocrmypdf(file_path, output_path, language)
 
         data = read_bytes(output_path)
         download_name = _download_name(
@@ -1426,7 +1549,7 @@ def ocr_pdf_task(file_path: str, language: str = "eng", original_filename: str =
         )
         return data, download_name
     except FileNotFoundError as e:
-        logger.error(f"OCR could not run: {e!r} (argv={cmd!r}, executable={sys.executable!r})")
+        logger.error(f"OCR could not run: {e!r} (executable={sys.executable!r})")
         raise Exception(f"OCR tool could not be started on this machine: {e}")
     except subprocess.TimeoutExpired:
         logger.error("OCR timed out after %s seconds", SUBPROCESS_TIMEOUT)

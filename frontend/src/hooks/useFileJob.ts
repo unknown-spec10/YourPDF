@@ -35,6 +35,8 @@ export interface UseFileJobReturn<TArgs> {
   data: DirectResult | null
   isSubmitting: boolean
   submitError: string | null
+  /** Server-provided note about how the job was handled, if any. */
+  notice: string | null
   isDone: boolean
   isError: boolean
 }
@@ -50,6 +52,7 @@ export function useFileJob<TArgs>(
 ): UseFileJobReturn<TArgs> {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [fileName, setFileName] = useState<string | null>(null)
   const [data, setData] = useState<DirectResult | null>(null)
@@ -72,6 +75,7 @@ export function useFileJob<TArgs>(
     async (args: TArgs): Promise<boolean> => {
       setIsSubmitting(true)
       setSubmitError(null)
+      setNotice(null)
       setIsError(false)
       setIsDone(false)
       setData(null)
@@ -92,6 +96,7 @@ export function useFileJob<TArgs>(
           setIsError(true)
           return false
         }
+        setNotice(res.headers.get('x-job-notice'))
         const contentType = res.headers.get('content-type') ?? ''
         if (contentType.includes('application/json')) {
           const json = (await res.json()) as DirectResult
@@ -138,6 +143,7 @@ export function useFileJob<TArgs>(
     setFileName(null)
     setData(null)
     setSubmitError(null)
+    setNotice(null)
     setIsDone(false)
     setIsError(false)
   }, [revokeUrl])
@@ -150,6 +156,7 @@ export function useFileJob<TArgs>(
     data,
     isSubmitting,
     submitError,
+    notice,
     isDone,
     isError,
   }

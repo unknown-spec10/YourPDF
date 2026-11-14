@@ -41,11 +41,14 @@ def _media_type_for(filename: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
-def _file_response(data: bytes, download_name: str) -> Response:
+def _file_response(data: bytes, download_name: str, headers: dict | None = None) -> Response:
+    response_headers = {"Content-Disposition": f'attachment; filename="{download_name}"'}
+    if headers:
+        response_headers.update(headers)
     return Response(
         content=data,
         media_type=_media_type_for(download_name),
-        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
+        headers=response_headers,
     )
 
 
@@ -192,12 +195,18 @@ def pdf_to_docx(
 
     relative_path = save_upload_file(file, ".pdf")
     try:
-        data, download_name = pdf_to_docx_task(relative_path, original_filename=file.filename)
+        result = pdf_to_docx_task(relative_path, original_filename=file.filename)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return _file_response(data, download_name)
+    headers = {
+        "X-OCR-Applied": "1" if result.ocr_applied else "0",
+        "Access-Control-Expose-Headers": "X-OCR-Applied, X-Job-Notice",
+    }
+    if result.notice:
+        headers["X-Job-Notice"] = result.notice
+    return _file_response(result.data, result.download_name, headers=headers)
 
 
 @router.post("/docx-to-pdf")

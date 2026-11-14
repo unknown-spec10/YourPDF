@@ -15,6 +15,10 @@ jobs:
   release:
     name: Build, sign & publish installer
     runs-on: windows-latest
+    # Explicit here as well as workflow-wide: the repo default is read-only, so the token
+    # only gets write because this block asks for it.
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -223,13 +227,20 @@ jobs:
           Get-ChildItem $stable | Select-Object Name, Length
 
       - name: Publish stable-name assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            desktop/release-assets/YourPDF-Desktop-setup.exe
-            desktop/release-assets/YourPDF-Desktop-*-setup.exe
-            desktop/release-assets/SHA256SUMS.txt
-            desktop/release-assets/install.ps1
-            desktop/release-assets/install.cmd
-            desktop/release-assets/INSTALL.txt
-          fail_on_unmatched_files: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Attach assets with `gh release upload` rather than action-gh-release: that action
+          # PATCHes the release and failed with "Resource not accessible by integration" even
+          # though tauri-action could attach assets with the same token.
+          $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          $dir = 'desktop/release-assets'
+          gh release upload $env:GITHUB_REF_NAME `
+            "$dir/YourPDF-Desktop-setup.exe" `
+            "$dir/YourPDF-Desktop-$version-setup.exe" `
+            "$dir/SHA256SUMS.txt" `
+            "$dir/install.ps1" `
+            "$dir/install.cmd" `
+            "$dir/INSTALL.txt" `
+            --clobber

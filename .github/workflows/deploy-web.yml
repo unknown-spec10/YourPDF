@@ -2,20 +2,27 @@ name: Deploy Web
 
 # Builds the container, proves it works *inside* the image, then deploys to Cloud Run.
 #
-# Separate from `deploy.yml` (CI) on purpose: this one needs GCP credentials and is the only
-# workflow with `id-token: write`. It is path-filtered so a desktop-era doc change does not
-# roll a revision, and `concurrency` means overlapping pushes cancel rather than race for the
-# same service.
-# Required repository *variables* (Settings → Secrets and variables → Actions → Variables), none
-# of which are secrets:
-#   GCP_PROJECT_ID                 project that hosts the service
-#   GCP_REGION                     e.g. asia-south1
-#   GCP_SERVICE_NAME               e.g. yourpdf-web
-#   GCP_ARTIFACT_REPO              Artifact Registry repository name
+# Registry is Docker Hub (deepdocker2023/yourpdf-web), NOT Artifact Registry: that is what
+# the live service was deployed from, and Cloud Run pulls it via its mirror.gcr.io mirror.
+# Auth uses the repo secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN.
+#
+# The deploy job is SKIPPED when GCP credentials are not configured (`vars.GCP_PROJECT_ID`
+# empty). The repo currently has NO GCP variables set, so a push to main builds and smokes
+# the image but does not produce a red build. Set the variables below to enable deploys.
+#
+# Required repository *variables* (Settings → Secrets and variables → Actions → Variables):
+#   GCP_PROJECT_ID                 project that hosts the service (gen-lang-client-0977081292)
+#   GCP_REGION                     asia-south1
+#   GCP_SERVICE_NAME               yourpdf-web
 #   GCP_WORKLOAD_IDENTITY_PROVIDER full resource name of the WIF provider
-#   GCP_DEPLOY_SERVICE_ACCOUNT     service account used to deploy (roles/run.developer + AR writer)
-#   PUBLIC_SITE_URL                absolute origin baked into og:image/twitter metadata
-# Nothing is stored as a long-lived key: the job federates via OIDC.
+#   GCP_DEPLOY_SERVICE_ACCOUNT     service account used to deploy (roles/run.developer)
+#   PUBLIC_SITE_URL                absolute origin baked into the Next export as the
+#                                  NEXT_PUBLIC_SITE_URL build arg (og:image/twitter metadata)
+# Nothing is stored as a long-lived key: the deploy job federates via OIDC.
+#
+# No IAP: the project has no Google Cloud Organization, so IAP cannot be configured (it
+# fails with 502 "Empty Google Account OAuth client ID(s)/secret(s)"). The service is
+# public instead: an idempotent allUsers -> roles/run.invoker binding after each deploy.
 on:
   workflow_dispatch:
   push:
@@ -28,25 +35,93 @@ on:
 
 permissions:
   contents: read
-  id-token: write # Workload Identity Federation; no long-lived service-account key
 
 concurrency:
   group: deploy-web
   cancel-in-progress: true
 
-env:
-  REGION: ${{ vars.GCP_REGION }}
-  SERVICE: ${{ vars.GCP_SERVICE_NAME }}
-  AR_REPO: ${{ vars.GCP_ARTIFACT_REPO }}
-  IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/${{ vars.GCP_SERVICE_NAME }}
-
 jobs:
-  deploy:
-    name: Build, smoke, deploy
+  build-and-push:
+    name: Build, push, smoke
     runs-on: ubuntu-latest
+    env:
+      IMAGE_REPO: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/yourpdf-web
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.build.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        # --provenance=false --sbom=false are load-bearing: a default buildx push produces
+        # an OCI index with an attestation entry, and Cloud Run's mirror.gcr.io rejects that
+        # layout with a misleading "Image '...' not found". These flags force a plain Docker
+        # v2 manifest. --platform linux/amd64 because Cloud Run does not run arm64.
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false \
+            --sbom=false \
+            --build-arg NEXT_PUBLIC_SITE_URL="${{ vars.PUBLIC_SITE_URL }}" \
+            -f web/Dockerfile \
+            -t "$IMAGE_REPO:${{ github.sha }}" \
+            -t "$IMAGE_REPO:latest" \
+            --metadata-file "$RUNNER_TEMP/buildx-metadata.json" \
+            --push .
+          # Read the pushed digest from buildx metadata, not from parsing push output.
+          # Deploy by digest: a tag can move, and a rollback needs the exact bytes.
+          DIGEST=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/buildx-metadata.json")
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
+            echo "buildx metadata contained no image digest" >&2
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_REPO@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke the image before it can reach users
+        # This is the real deploy gate: run the suite against the pushed image itself and
+        # fail on a SKIP — a missing native tool (LibreOffice, tessdata, ocrmypdf) must fail
+        # here, not on the first user's pptx. Pulling the tag also proves the push landed.
+        run: |
+          docker pull "$IMAGE_REPO:${{ github.sha }}"
+          docker run -d --name smoke -p 8080:8080 "$IMAGE_REPO:${{ github.sha }}"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/health
+          docker exec smoke python -m web.tests.smoke_endpoints --base http://127.0.0.1:8080 --fail-on-skip
+          # The export is git-ignored; assert the image actually serves it.
+          curl -fsS http://127.0.0.1:8080/ | grep -qi "YourPDF"
+
+      - name: Remove smoke container
+        if: always()
+        run: docker rm -f smoke || true
+
+  deploy:
+    name: Deploy to Cloud Run
+    needs: build-and-push
+    # No GCP variables configured yet -> skip instead of failing the push.
+    if: vars.GCP_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federation; no long-lived service-account key
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      SERVICE: ${{ vars.GCP_SERVICE_NAME }}
+    steps:
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
         with:
@@ -56,65 +131,81 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
-
-      - name: Build and push
-        id: build
-        run: |
-          docker build -f web/Dockerfile \
-            --build-arg NEXT_PUBLIC_SITE_URL="${{ vars.PUBLIC_SITE_URL }}" \
-            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
-          docker push --all-tags "$IMAGE"
-          # Deploy by digest: a tag can move, and a rollback needs the exact bytes.
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:${{ github.sha }}" | cut -d@ -f2)
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "image=$IMAGE@$DIGEST" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke the image before it can reach users
-        # Runs the 35-case suite against the container itself and fails on a SKIP: a missing
-        # native tool (Impress, tessdata, ocrmypdf) must fail here, not on the first user's
-        # pptx. A green run on a machine without those tools proves nothing.
-        run: |
-          docker run -d --name smoke -p 8080:8080 "${{ steps.build.outputs.image }}"
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
-            sleep 1
-          done
-          curl -fsS http://127.0.0.1:8080/health
-          docker exec smoke python -m web.tests.smoke_endpoints --base http://127.0.0.1:8080 --fail-on-skip
-          # The export is git-ignored; assert the image actually serves it.
-          curl -fsS http://127.0.0.1:8080/ | grep -qi "YourPDF"
-          docker rm -f smoke
-
       - name: Deploy to Cloud Run
         # concurrency 1: the work is CPU-bound and shells out to single-threaded tools.
         # timeout 900: must exceed the app's own SUBPROCESS_TIMEOUT (600 s) or a long OCR is
         #   killed by the platform while the container keeps working.
         # memory 4Gi: LibreOffice + OCR + a 100-page raster, with /tmp counted as RAM.
-        # IAP: the public model is Google sign-in; the service itself must refuse anonymous
-        #   callers so the gate cannot be bypassed by hitting the URL behind the proxy's back.
+        # Never set PORT as an env var — Cloud Run reserves it and the deploy fails.
+        #
+        # Retry loop: Cloud Run's Docker Hub mirror (mirror.gcr.io) lags a fresh push and
+        # answers "Image 'mirror.gcr.io/<user>/<repo>:<tag>' not found" for the first 1-3
+        # attempts. Retry the SAME immutable digest every ~90 s, up to 4 attempts, instead
+        # of rebuilding. A failed attempt costs nothing: the service already exists and
+        # traffic only moves to the new revision on success.
         run: |
-          gcloud run deploy "$SERVICE" \
-            --image "${{ steps.build.outputs.image }}" \
+          IMAGE="${{ needs.build-and-push.outputs.image }}"
+          deployed=false
+          for attempt in 1 2 3 4; do
+            echo "Deploy attempt $attempt/4: $IMAGE"
+            if gcloud run deploy "$SERVICE" \
+              --image "$IMAGE" \
+              --project "$PROJECT" \
+              --region "$REGION" \
+              --platform managed \
+              --port 8080 \
+              --cpu 2 \
+              --memory 4Gi \
+              --concurrency 1 \
+              --timeout 900 \
+              --min-instances 0 \
+              --max-instances 2 \
+              --cpu-boost \
+              --execution-environment gen2 \
+              --set-env-vars "YOURPDF_TMP=/tmp,HOME=/tmp,TMPDIR=/tmp,MAX_FILE_SIZE_MB=30,MAX_TOTAL_UPLOAD_MB=30,MAX_RENDER_PAGES=100,YOURPDF_OUT=/app/frontend/out,WEB_LOG_LEVEL=info" \
+              --labels "commit=${{ github.sha }},managed-by=github-actions" \
+              --quiet; then
+              deployed=true
+              break
+            fi
+            echo "Attempt $attempt failed (mirror lag is the usual cause)."
+            if [ "$attempt" -lt 4 ]; then
+              echo "Retrying the same digest in 90 s..."
+              sleep 90
+            fi
+          done
+          if [ "$deployed" != "true" ]; then
+            echo "All 4 deploy attempts failed." >&2
+            exit 1
+          fi
+
+      - name: Ensure public access
+        # No IAP (no Google Cloud Organization in this project), so the service is public.
+        # add-iam-policy-binding is idempotent. `gcloud run services update` has no
+        # --allow-unauthenticated flag — this binding is the supported way.
+        run: |
+          gcloud run services add-iam-policy-binding "$SERVICE" \
+            --project "$PROJECT" \
             --region "$REGION" \
-            --platform managed \
-            --port 8080 \
-            --cpu 2 \
-            --memory 4Gi \
-            --concurrency 1 \
-            --timeout 900 \
-            --min-instances 0 \
-            --max-instances 4 \
-            --cpu-boost \
-            --execution-environment gen2 \
-            --set-env-vars "YOURPDF_TMP=/tmp,HOME=/tmp,TMPDIR=/tmp,MAX_FILE_SIZE_MB=30,MAX_TOTAL_UPLOAD_MB=30,MAX_RENDER_PAGES=100,YOURPDF_OUT=/app/frontend/out,WEB_LOG_LEVEL=info" \
-            --labels "commit=${{ github.sha }},managed-by=github-actions" \
-            --iap \
-            --no-allow-unauthenticated \
+            --member=allUsers \
+            --role=roles/run.invoker \
             --quiet
 
-      - name: Report the revision
+      - name: Verify the live service
         run: |
-          echo "Deployed $SERVICE (${{ steps.build.outputs.digest }})" >> "$GITHUB_STEP_SUMMARY"
-          gcloud run services describe "$SERVICE" --region "$REGION" --format 'value(status.url)' >> "$GITHUB_STEP_SUMMARY"
+          URL=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')
+          ok=false
+          for i in $(seq 1 24); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/health" || true)
+            if [ "$code" = "200" ]; then ok=true; break; fi
+            sleep 5
+          done
+          if [ "$ok" != "true" ]; then
+            echo "$URL/health never returned 200 within ~2 minutes" >&2
+            exit 1
+          fi
+          {
+            echo "### Deployed $SERVICE"
+            echo "- URL: $URL"
+            echo "- Image: ${{ needs.build-and-push.outputs.image }}"
+          } >> "$GITHUB_STEP_SUMMARY"

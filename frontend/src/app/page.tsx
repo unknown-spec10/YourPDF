@@ -83,7 +83,7 @@ export default function Home() {
           transition={{ duration: 0.5, delay: 0.14 }}
           className="mt-5 max-w-xl text-base leading-relaxed text-muted md:text-lg"
         >
-          No accounts. No trackers. Files are processed on our servers and hard-deleted the moment your task finishes.
+          Sign in with Google. No trackers. Files are processed on our servers and hard-deleted the moment your task finishes.
         </motion.p>
 
         <motion.div
@@ -94,7 +94,7 @@ export default function Home() {
         >
           <Link
             href="/tools"
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-foreground px-6 text-sm font-semibold text-background shadow-md transition-all duration-150 hover:opacity-90 active:scale-[0.98]"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-6 text-sm font-semibold text-accent-foreground shadow-md transition-all duration-150 hover:bg-accent-hover active:scale-[0.98]"
           >
             <span>Get started — all tools</span>
             <ArrowRight className="h-4 w-4" />
@@ -248,9 +248,9 @@ export default function Home() {
             <EyeOff className="h-5 w-5" strokeWidth={1.8} />
           </div>
           <div>
-            <h3 className="text-[15px] font-semibold tracking-tight text-foreground">No account needed</h3>
+            <h3 className="text-[15px] font-semibold tracking-tight text-foreground">One Google sign-in</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted">
-              No subscription or signups. Immediate, anonymous processing with zero cookies or tracking IDs.
+              Sign in once with Google, then process immediately — no subscription and zero tracking cookies.
             </p>
           </div>
         </div>

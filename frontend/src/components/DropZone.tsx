@@ -1,12 +1,16 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useId, useState } from 'react'
 import { useDropzone, Accept } from 'react-dropzone'
 import { motion } from 'framer-motion'
 import { UploadCloud, AlertCircle } from 'lucide-react'
+import { MAX_TOTAL_UPLOAD_BYTES, MAX_TOTAL_UPLOAD_MB } from '@/lib/limits'
 
 interface DropZoneProps {
   onFileAccepted: (file: File) => void
+  /** Multi-file tools add every accepted file instead of only the first. */
+  onFilesAccepted?: (files: File[]) => void
+  multiple?: boolean
   accept?: Accept
   maxSize?: number // In bytes
   disabled?: boolean
@@ -16,42 +20,57 @@ interface DropZoneProps {
 
 export default function DropZone({
   onFileAccepted,
+  onFilesAccepted,
+  multiple = false,
   accept = { 'application/pdf': ['.pdf'] },
-  maxSize = 52428800, // 50MB default
+  // Defaults to the service budget rather than a rounder number: the old 50 MB default let a
+  // user pick a file the service refuses, and the refusal came from the hosting layer before
+  // the app could explain it.
+  maxSize = MAX_TOTAL_UPLOAD_BYTES,
   disabled = false,
   placeholderText = 'Drop your PDF here',
   error = null,
 }: DropZoneProps) {
+  const messageId = useId()
+  const [localError, setLocalError] = useState<string | null>(null)
+
   const onDrop = useCallback(
     (acceptedFiles: File[], rejectedFiles: any[]) => {
       if (disabled) return
 
       if (acceptedFiles.length > 0) {
-        onFileAccepted(acceptedFiles[0])
+        setLocalError(null)
+        if (multiple && onFilesAccepted) onFilesAccepted(acceptedFiles)
+        else onFileAccepted(acceptedFiles[0])
       } else if (rejectedFiles.length > 0) {
-        const error = rejectedFiles[0].errors[0]
-        if (error.code === 'file-too-large') {
-          alert(`File is too large. Max size is ${maxSize / 1024 / 1024}MB.`)
-        } else if (error.code === 'file-invalid-type') {
+        const rejection = rejectedFiles[0].errors[0]
+        if (rejection.code === 'file-too-large') {
+          setLocalError(
+            `File is too large. The limit is ${MAX_TOTAL_UPLOAD_MB} MB per request, all files together.`,
+          )
+        } else if (rejection.code === 'file-invalid-type') {
           const extensions = Object.values(accept).flat().join(', ').toUpperCase()
-          alert(`Invalid file type. Only ${extensions} files are supported.`)
+          setLocalError(`Invalid file type. Only ${extensions} files are supported.`)
         } else {
-          alert(error.message || 'Error uploading file.')
+          setLocalError(rejection.message || 'Error uploading file.')
         }
+      } else {
+        setLocalError(null)
       }
     },
-    [onFileAccepted, disabled, maxSize, accept]
+    [onFileAccepted, onFilesAccepted, multiple, disabled, accept]
   )
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({
     onDrop,
     accept,
     maxSize,
-    multiple: false,
+    multiple,
     disabled,
   })
 
-  const hasError = Boolean(error) || isDragReject
+  const shownError = localError ?? error
+  const hasError = Boolean(shownError) || isDragReject
 
   return (
     <div {...getRootProps()} className="w-full cursor-pointer outline-none">
@@ -63,7 +82,7 @@ export default function DropZone({
           borderColor: hasError
             ? 'var(--danger)'
             : isDragActive
-              ? 'var(--accent)'
+              ? 'var(--accent-signal)'
               : 'var(--border)',
           backgroundColor: hasError
             ? 'var(--danger-subtle)'
@@ -74,10 +93,10 @@ export default function DropZone({
         transition={{ duration: 0.2, ease: 'easeOut' }}
         role="button"
         aria-disabled={disabled}
-        aria-invalid={hasError}
-        className={`flex flex-col items-center justify-center rounded-xl border border-dashed p-6 text-center transition-shadow duration-200 sm:p-10 ${
+        aria-describedby={hasError ? messageId : undefined}
+        className={`flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface p-6 text-center transition-shadow duration-200 sm:p-10 ${
           disabled ? 'cursor-not-allowed opacity-50' : ''
-        } ${!hasError && !isDragActive ? 'hover:border-accent/60' : ''} focus-visible:outline-2 focus-visible:outline-ring`}
+        } ${!hasError && !isDragActive ? 'hover:border-[var(--accent-signal)]' : ''} focus-visible:outline-2 focus-visible:outline-ring`}
         style={{ boxShadow: isDragActive ? 'var(--shadow-lg)' : 'var(--shadow-sm)' }}
       >
         <div
@@ -100,20 +119,27 @@ export default function DropZone({
           )}
         </div>
 
-        <h3 className="mt-4 text-[15px] font-semibold tracking-tight text-foreground">
-          {hasError && error
-            ? error
+        <h3
+          id={messageId}
+          className="mt-4 text-[15px] font-semibold tracking-tight text-foreground"
+          // A rejected file used to open a blocking alert. The same sentence is now announced
+          // from here, where it also stays on screen after the user dismisses nothing.
+          role={hasError ? 'alert' : undefined}
+          aria-live={hasError ? 'polite' : undefined}
+        >
+          {hasError && shownError
+            ? shownError
             : isDragActive
               ? 'Release to upload your file'
               : placeholderText}
         </h3>
         <p className="mt-1 text-sm text-muted">
-          {hasError && !error
+          {hasError && !shownError
             ? 'This file type is not supported — try another file'
             : 'or click to browse from your device'}
         </p>
         <p className="mt-3 font-mono text-xs tabular-nums text-muted/80">
-          Maximum file size: {maxSize / 1024 / 1024}MB
+          Maximum {maxSize / 1024 / 1024} MB per request
         </p>
       </motion.div>
     </div>

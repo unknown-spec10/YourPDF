@@ -1,18 +1,10 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
-  ArrowLeft,
   PenLine,
-  Download,
-  RefreshCw,
   AlertTriangle,
-  Eye,
-  FileText,
-  X,
-  Repeat,
   ChevronLeft,
   ChevronRight,
   Undo2,
@@ -23,8 +15,7 @@ import {
   Check,
   CalendarDays,
 } from 'lucide-react'
-import DropZone from '@/components/DropZone'
-import ProgressBar from '@/components/ProgressBar'
+import ToolShell, { PreviewAction } from '@/components/tool/ToolShell'
 import { useFileJob } from '@/hooks/useFileJob'
 import { apiClient, submitJob, API_URL, resolveApiPath, apiKeyHeaders } from '@/lib/api'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
@@ -37,7 +28,7 @@ const DRAW_H = 220
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 const CHECKERBOARD: React.CSSProperties = {
-  backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #fafafa 0% 50%)',
+  backgroundImage: 'repeating-conic-gradient(#e2d8c6 0% 25%, #fffcf5 0% 50%)',
   backgroundSize: '16px 16px',
 }
 
@@ -726,8 +717,8 @@ export default function SignPage() {
   const isPagesAll = pagesTrimmed.toLowerCase() === 'all'
   const pagesValid = isPagesAll || (pagesTrimmed !== '' && selectedPages.size > 0)
 
-  const { isSubmitting, isDone, isError, submitError, submit, reset, downloadUrl, fileName } =
-    useFileJob<SignArgs>(signSubmitter)
+  const job = useFileJob<SignArgs>(signSubmitter)
+  const { isDone, submit, reset, downloadUrl } = job
 
   const handleUseSignature = async (dataUrl: string) => {
     try {
@@ -745,17 +736,21 @@ export default function SignPage() {
     }
   }
 
+  const [formError, setFormError] = useState<string | null>(null)
+
+
   const handleSubmit = async () => {
+    setFormError(null)
     if (!file || !signature) return
     if (!pages.trim()) {
-      alert('Please enter pages to sign (e.g. all or 1-3, 5).')
+      setFormError('Please enter pages to sign (e.g. all or 1-3, 5).')
       return
     }
     if (numPages !== null && !pagesValid) {
-      alert('Pages range is invalid or out of range for this file.')
+      setFormError('Pages range is invalid or out of range for this file.')
       return
     }
-    const ok = await submit({
+    await submit({
       file,
       signature: dataURLToBlob(signature.dataUrl),
       pages: pages.trim() || 'all',
@@ -768,9 +763,6 @@ export default function SignPage() {
       date_size: DATE_SIZE_MAP[dateSize],
       date_position: datePosition,
     })
-    if (!ok) {
-      alert('Failed to initialize signing task. Please check server connection.')
-    }
   }
 
   const resetPlacement = () => {
@@ -796,11 +788,6 @@ export default function SignPage() {
   }
 
   const handleReset = () => {
-    handleRemoveFile()
-    reset()
-  }
-
-  const handleSignAnother = () => {
     handleRemoveFile()
     reset()
   }
@@ -845,8 +832,6 @@ export default function SignPage() {
     setSigWidth(clamp(d.width + ((e.clientX - d.startX) / r.width) * 100, 5, 90))
   }
 
-  const canSubmit = file && signature && !isSubmitting && pagesValid
-  const isWorkspace = file && !isDone && !isError && !isSubmitting
   const rotValue = rotation === '' ? 0 : rotation
   const [previewDate] = useState(() =>
     new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -854,566 +839,414 @@ export default function SignPage() {
   const todayStr = previewDate
 
   return (
-    <div className={`mx-auto w-full min-w-0 flex-1 flex flex-col justify-center overflow-x-clip px-4 sm:px-6 py-6 sm:py-10 transition-all duration-300 ${file ? 'max-w-[1400px]' : 'max-w-2xl'}`}>
-      {/* Header */}
-      <div className="mb-5 sm:mb-7 min-w-0">
-        <Link href="/tools" className="inline-flex items-center gap-2 text-sm text-muted hover:text-foreground mb-3 transition-colors">
-          <ArrowLeft className="h-4 w-4" />
-          <span>Back to all tools</span>
-        </Link>
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
-            <PenLine className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Sign PDF</h1>
-            <p className="text-sm text-muted mt-0.5">Draw, type, or upload a signature, place it, and stamp it onto your PDF.</p>
-          </div>
-        </div>
-      </div>
-
-      <AnimatePresence mode="wait">
-        {!file && !isDone && !isError && !isSubmitting && (
-          <motion.div
-            key="dropzone"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="flex flex-col gap-3 min-w-0"
-          >
-            <DropZone onFileAccepted={setFile} />
-            <p className="text-center text-xs text-muted">
-              Your signature stays in this browser — nothing is uploaded until you sign.
-            </p>
-          </motion.div>
-        )}
-
-        {isWorkspace && file && (
-          <motion.div
-            key="file-selected"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="flex flex-col gap-4 sm:gap-5 min-w-0"
-          >
-            {/* Slim file bar */}
-            <div className="flex items-center gap-3 min-w-0 rounded-xl border border-card-border bg-surface px-3 py-2.5 shadow-sm">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
-                <FileText className="h-4 w-4" />
+    <>
+      <ToolShell
+        icon={<PenLine className="h-5 w-5" />}
+        title="Sign PDF"
+        subtitle="Draw, type, or upload a signature, place it, and stamp it onto your PDF."
+        file={file}
+        onFileAccepted={setFile}
+        onReset={handleReset}
+        onRetry={reset}
+        fileMeta={`${numPages !== null ? `${numPages} pages` : 'reading…'} · ${isPagesAll ? 'signing all' : `${selectedPages.size} selected`}`}
+        job={job}
+        validationError={formError}
+        onSubmit={handleSubmit}
+        submitLabel="Sign PDF"
+        submitDisabled={!file || !signature || !pagesValid}
+        submitHint={!signature ? 'Create a signature above to enable signing.' : undefined}
+        dropzoneHint="Your signature stays in this browser — nothing is uploaded until you sign."
+        busyMessage="Signing PDF..."
+        doneTitle="PDF Signed!"
+        doneBody="Your signed PDF is ready. Preview it to verify placement, then download."
+        downloadLabel="Download PDF"
+        doneActions={<PreviewAction onClick={() => setIsPreviewOpen(true)} />}
+        errorTitle="Signing Failed"
+        settings={
+          <>
+            {/* 01 — Signature */}
+            <div className="flex flex-col gap-2.5 min-w-0 rounded-xl border border-card-border bg-surface p-3.5 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[13px] font-semibold">01 — Signature</span>
+                {signature && !studioOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setStudioOpen(true)}
+                    className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2.5 text-xs font-semibold text-muted hover:text-foreground hover:bg-surface-2 cursor-pointer transition-colors"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    <span>Edit</span>
+                  </button>
+                )}
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="truncate text-sm font-medium tracking-tight">{file.name}</p>
-                <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB{numPages !== null ? ` · ${numPages} pages` : ' · reading…'} · {isPagesAll ? 'signing all' : `${selectedPages.size} selected`}
+
+              {(!signature || studioOpen) ? (
+                <>
+                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-2 p-1" role="tablist" aria-label="Signature input methods">
+                    {(
+                      [
+                        { id: 'draw', label: 'Draw', icon: Pencil },
+                        { id: 'type', label: 'Type', icon: Type },
+                        { id: 'upload', label: 'Upload', icon: Upload },
+                      ] as const
+                    ).map((t) => {
+                      const Icon = t.icon
+                      const active = studioTab === t.id
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() => setStudioTab(t.id)}
+                          className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-md text-[13px] font-semibold transition-colors cursor-pointer ${
+                            active ? 'bg-surface text-foreground shadow-sm ring-1 ring-border' : 'text-muted hover:text-foreground'
+                          }`}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          <span>{t.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {studioTab === 'draw' && <DrawStudio onUse={handleUseSignature} />}
+                  {studioTab === 'type' && <TypeStudio onUse={handleUseSignature} />}
+                  {studioTab === 'upload' && <UploadStudio onUse={handleUseSignature} />}
+                </>
+              ) : (
+                signature && (
+                  <div className="flex items-center gap-3 rounded-xl border border-border p-3 overflow-hidden" style={CHECKERBOARD}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={signature.dataUrl} alt="Your signature" className="max-h-16 w-auto max-w-[70%]" />
+                    <span className="ml-auto shrink-0 rounded-full bg-success-subtle px-2.5 py-1 text-[11px] font-semibold text-success">
+                      Saved
+                    </span>
+                  </div>
+                )
+              )}
+            </div>
+
+            {/* 02 — Pages */}
+            <div className="flex flex-col gap-1.5 min-w-0 rounded-xl border border-card-border bg-surface p-3.5 shadow-sm">
+              <label htmlFor="sign-pages" className="flex items-baseline justify-between gap-2 text-[13px] font-semibold">
+                <span>02 — Pages to sign</span>
+                <span className="text-xs text-muted font-normal">
+                  {numPages !== null
+                    ? isPagesAll
+                      ? `${numPages} pages`
+                      : `${selectedPages.size} of ${numPages}`
+                    : 'e.g. all or 1-3, 5'}
+                </span>
+              </label>
+              <input
+                id="sign-pages"
+                type="text"
+                value={pages}
+                onChange={(e) => setPages(e.target.value)}
+                placeholder="e.g. all or 1-3, 5"
+                className="w-full h-11 px-3.5 rounded-lg border border-border bg-surface text-foreground placeholder-muted focus:outline-none focus:border-accent transition-colors text-sm font-mono"
+              />
+              <p className="text-xs text-muted leading-relaxed">
+                <span className="font-mono text-accent">all</span> signs every page. Use <span className="font-mono text-accent">1-3, 5</span> or open-ended <span className="font-mono text-accent">3-</span> for specific pages.
+              </p>
+              {numPages !== null && pagesTrimmed !== '' && !pagesValid && (
+                <p className="text-xs text-danger leading-relaxed">
+                  No valid pages selected. Check the range against this file&apos;s {numPages} pages.
+                </p>
+              )}
+            </div>
+
+            {/* 03 — Placement */}
+            <div className="flex flex-col gap-3 min-w-0 rounded-xl border border-card-border bg-surface p-3.5 shadow-sm">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <span className="text-[13px] font-semibold">03 — Size & rotation</span>
+                <span className="shrink-0 font-mono text-xs tabular-nums text-muted">
+                  {sigWidth.toFixed(1)}% · {rotValue}°
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="sign-width" className="text-[11px] font-bold text-muted uppercase tracking-wide">
+                  Width ({sigWidth.toFixed(1)}% of page)
+                </label>
+                <input
+                  id="sign-width"
+                  type="range"
+                  min={5}
+                  max={90}
+                  step={0.5}
+                  value={sigWidth}
+                  onChange={(e) => setSigWidth(Number(e.target.value))}
+                  aria-label="Signature width as percent of page width"
+                  className="w-full min-w-0 accent-[var(--accent)] cursor-pointer"
+                />
+                <p className="text-[11px] leading-snug text-muted">
+                  Drag the box to move it, or pull its corner handle to resize. Position {cx.toFixed(1)}% / {cy.toFixed(1)}% from top-left.
                 </p>
               </div>
-              <label className="inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold text-muted hover:text-foreground hover:bg-surface-2 transition-colors">
-                <Repeat className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Replace</span>
+              <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-background px-3 py-3">
+                <label htmlFor="sign-rotation-slider" className="text-[11px] font-bold text-muted uppercase tracking-wide">
+                  Rotation ({rotValue}° clockwise)
+                </label>
                 <input
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    const next = e.target.files?.[0]
-                    if (next) setFile(next)
-                    e.target.value = ''
-                  }}
+                  id="sign-rotation-slider"
+                  type="range"
+                  min={-180}
+                  max={180}
+                  step={1}
+                  value={rotValue}
+                  onChange={(e) => setRotation(Number(e.target.value))}
+                  aria-label="Signature rotation slider (clockwise degrees)"
+                  className="w-full min-w-0 accent-[var(--accent)] cursor-pointer"
                 />
-              </label>
-              <button
-                type="button"
-                onClick={handleRemoveFile}
-                aria-label="Remove file"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger-subtle hover:text-danger transition-colors cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {/* Workspace: compact settings + generous placement stage */}
-            <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-4 sm:gap-5 items-start min-w-0">
-              {/* Settings */}
-              <div className="flex flex-col gap-4 min-w-0 order-1">
-                {/* 01 — Signature */}
-                <div className="flex flex-col gap-2.5 min-w-0 rounded-xl border border-card-border bg-surface p-3.5 shadow-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13px] font-semibold">01 — Signature</span>
-                    {signature && !studioOpen && (
-                      <button
-                        type="button"
-                        onClick={() => setStudioOpen(true)}
-                        className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2.5 text-xs font-semibold text-muted hover:text-foreground hover:bg-surface-2 cursor-pointer transition-colors"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                        <span>Edit</span>
-                      </button>
-                    )}
-                  </div>
-
-                  {(!signature || studioOpen) ? (
-                    <>
-                      <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-2 p-1" role="tablist" aria-label="Signature input methods">
-                        {(
-                          [
-                            { id: 'draw', label: 'Draw', icon: Pencil },
-                            { id: 'type', label: 'Type', icon: Type },
-                            { id: 'upload', label: 'Upload', icon: Upload },
-                          ] as const
-                        ).map((t) => {
-                          const Icon = t.icon
-                          const active = studioTab === t.id
-                          return (
-                            <button
-                              key={t.id}
-                              type="button"
-                              role="tab"
-                              aria-selected={active}
-                              onClick={() => setStudioTab(t.id)}
-                              className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-md text-[13px] font-semibold transition-colors cursor-pointer ${
-                                active ? 'bg-surface text-foreground shadow-sm ring-1 ring-border' : 'text-muted hover:text-foreground'
-                              }`}
-                            >
-                              <Icon className="h-3.5 w-3.5" />
-                              <span>{t.label}</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                      {studioTab === 'draw' && <DrawStudio onUse={handleUseSignature} />}
-                      {studioTab === 'type' && <TypeStudio onUse={handleUseSignature} />}
-                      {studioTab === 'upload' && <UploadStudio onUse={handleUseSignature} />}
-                    </>
-                  ) : (
-                    signature && (
-                      <div className="flex items-center gap-3 rounded-xl border border-border p-3 overflow-hidden" style={CHECKERBOARD}>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={signature.dataUrl} alt="Your signature" className="max-h-16 w-auto max-w-[70%]" />
-                        <span className="ml-auto shrink-0 rounded-full bg-success-subtle px-2.5 py-1 text-[11px] font-semibold text-success">
-                          Saved
-                        </span>
-                      </div>
-                    )
-                  )}
-                </div>
-
-                {/* 02 — Pages */}
-                <div className="flex flex-col gap-1.5 min-w-0 rounded-xl border border-card-border bg-surface p-3.5 shadow-sm">
-                  <label htmlFor="sign-pages" className="flex items-baseline justify-between gap-2 text-[13px] font-semibold">
-                    <span>02 — Pages to sign</span>
-                    <span className="text-xs text-muted font-normal">
-                      {numPages !== null
-                        ? isPagesAll
-                          ? `${numPages} pages`
-                          : `${selectedPages.size} of ${numPages}`
-                        : 'e.g. all or 1-3, 5'}
-                    </span>
-                  </label>
+                <div className="flex items-center gap-2 min-w-0">
                   <input
-                    id="sign-pages"
-                    type="text"
-                    value={pages}
-                    onChange={(e) => setPages(e.target.value)}
-                    placeholder="e.g. all or 1-3, 5"
-                    className="w-full h-11 px-3.5 rounded-lg border border-border bg-surface text-foreground placeholder-muted focus:outline-none focus:border-accent transition-colors text-sm font-mono"
+                    type="number"
+                    min={-180}
+                    max={180}
+                    step={0.5}
+                    value={rotation}
+                    placeholder="0"
+                    onChange={(e) => {
+                      const v = e.target.value
+                      if (v === '') {
+                        setRotation('')
+                        return
+                      }
+                      const n = parseFloat(v)
+                      if (Number.isNaN(n)) {
+                        setRotation('')
+                        return
+                      }
+                      setRotation(clamp(n, -180, 180))
+                    }}
+                    aria-label="Signature rotation in degrees (clockwise)"
+                    className="h-10 w-full min-w-0 rounded-lg border border-border bg-surface px-3 text-sm font-mono tabular-nums text-foreground focus:outline-none focus:border-accent"
                   />
-                  <p className="text-xs text-muted leading-relaxed">
-                    <span className="font-mono text-accent">all</span> signs every page. Use <span className="font-mono text-accent">1-3, 5</span> or open-ended <span className="font-mono text-accent">3-</span> for specific pages.
-                  </p>
-                  {numPages !== null && pagesTrimmed !== '' && !pagesValid && (
-                    <p className="text-xs text-danger leading-relaxed">
-                      No valid pages selected. Check the range against this file&apos;s {numPages} pages.
-                    </p>
-                  )}
-                </div>
-
-                {/* 03 — Placement */}
-                <div className="flex flex-col gap-3 min-w-0 rounded-xl border border-card-border bg-surface p-3.5 shadow-sm">
-                  <div className="flex items-center justify-between gap-2 min-w-0">
-                    <span className="text-[13px] font-semibold">03 — Size & rotation</span>
-                    <span className="shrink-0 font-mono text-xs tabular-nums text-muted">
-                      {sigWidth.toFixed(1)}% · {rotValue}°
-                    </span>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="sign-width" className="text-[11px] font-bold text-muted uppercase tracking-wide">
-                      Width ({sigWidth.toFixed(1)}% of page)
-                    </label>
-                    <input
-                      id="sign-width"
-                      type="range"
-                      min={5}
-                      max={90}
-                      step={0.5}
-                      value={sigWidth}
-                      onChange={(e) => setSigWidth(Number(e.target.value))}
-                      aria-label="Signature width as percent of page width"
-                      className="w-full min-w-0 accent-[var(--accent)] cursor-pointer"
-                    />
-                    <p className="text-[11px] leading-snug text-muted">
-                      Drag the box to move it, or pull its corner handle to resize. Position {cx.toFixed(1)}% / {cy.toFixed(1)}% from top-left.
-                    </p>
-                  </div>
-                  <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-background px-3 py-3">
-                    <label htmlFor="sign-rotation-slider" className="text-[11px] font-bold text-muted uppercase tracking-wide">
-                      Rotation ({rotValue}° clockwise)
-                    </label>
-                    <input
-                      id="sign-rotation-slider"
-                      type="range"
-                      min={-180}
-                      max={180}
-                      step={1}
-                      value={rotValue}
-                      onChange={(e) => setRotation(Number(e.target.value))}
-                      aria-label="Signature rotation slider (clockwise degrees)"
-                      className="w-full min-w-0 accent-[var(--accent)] cursor-pointer"
-                    />
-                    <div className="flex items-center gap-2 min-w-0">
-                      <input
-                        type="number"
-                        min={-180}
-                        max={180}
-                        step={0.5}
-                        value={rotation}
-                        placeholder="0"
-                        onChange={(e) => {
-                          const v = e.target.value
-                          if (v === '') {
-                            setRotation('')
-                            return
-                          }
-                          const n = parseFloat(v)
-                          if (Number.isNaN(n)) {
-                            setRotation('')
-                            return
-                          }
-                          setRotation(clamp(n, -180, 180))
-                        }}
-                        aria-label="Signature rotation in degrees (clockwise)"
-                        className="h-10 w-full min-w-0 rounded-lg border border-border bg-surface px-3 text-sm font-mono tabular-nums text-foreground focus:outline-none focus:border-accent"
-                      />
-                      <span className="shrink-0 text-sm text-muted">° clockwise</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 04 — Date */}
-                <div className="flex flex-col gap-3 min-w-0 rounded-xl border border-card-border bg-surface px-3.5 py-3 shadow-sm">
-                  <div className="flex cursor-pointer items-center justify-between gap-3">
-                    <span className="flex items-center gap-2.5 min-w-0">
-                      <CalendarDays className="h-4 w-4 shrink-0 text-muted" />
-                      <span className="text-[13px] font-semibold">Add date under signature</span>
-                    </span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={addDate}
-                      aria-label="Add date under signature"
-                      onClick={() => setAddDate(!addDate)}
-                      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors cursor-pointer ${
-                        addDate ? 'bg-accent' : 'bg-surface-2 ring-1 ring-border'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                          addDate ? 'left-[22px]' : 'left-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-                  {addDate && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="flex flex-col gap-3"
-                    >
-                      <div className="flex flex-col gap-1.5">
-                        <label htmlFor="sign-date-text" className="text-[11px] font-bold text-muted uppercase tracking-wide">
-                          Date text
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            id="sign-date-text"
-                            type="text"
-                            value={dateText}
-                            onChange={(e) => setDateText(e.target.value)}
-                            placeholder={todayStr}
-                            maxLength={100}
-                            className="h-10 w-full min-w-0 rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted/70 focus:border-accent focus:outline-none transition-colors"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setDateText('')}
-                            className="inline-flex h-10 shrink-0 items-center rounded-lg border border-border px-2.5 text-xs font-semibold text-muted hover:text-foreground hover:bg-surface-2 cursor-pointer transition-colors"
-                          >
-                            Today
-                          </button>
-                        </div>
-                        <p className="text-[11px] leading-snug text-muted">Empty = today ({todayStr}).</p>
-                      </div>
-                      <div className="flex flex-col gap-1.5">
-                        <span className="text-[11px] font-bold text-muted uppercase tracking-wide">Size</span>
-                        <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-2 p-1" role="group" aria-label="Date size">
-                          {(Object.keys(DATE_SIZE_MAP) as DateSize[]).map((s) => (
-                            <button
-                              key={s}
-                              type="button"
-                              aria-pressed={dateSize === s}
-                              onClick={() => setDateSize(s)}
-                              className={`inline-flex h-9 items-center justify-center rounded-md text-[13px] font-semibold transition-colors cursor-pointer ${
-                                dateSize === s ? 'bg-surface text-foreground shadow-sm ring-1 ring-border' : 'text-muted hover:text-foreground'
-                              }`}
-                            >
-                              {s}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-1.5">
-                        <span className="text-[11px] font-bold text-muted uppercase tracking-wide">Position</span>
-                        <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-2 p-1" role="group" aria-label="Date position">
-                          {(['below', 'above'] as const).map((p) => (
-                            <button
-                              key={p}
-                              type="button"
-                              aria-pressed={datePosition === p}
-                              onClick={() => setDatePosition(p)}
-                              className={`inline-flex h-9 items-center justify-center rounded-md text-[13px] font-semibold capitalize transition-colors cursor-pointer ${
-                                datePosition === p ? 'bg-surface text-foreground shadow-sm ring-1 ring-border' : 'text-muted hover:text-foreground'
-                              }`}
-                            >
-                              {p}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
-
-                <div className="sticky bottom-3 lg:static">
-                  <button
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                    className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent text-sm font-semibold text-accent-foreground hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
-                  >
-                    <PenLine className="h-4 w-4" />
-                    <span>{isSubmitting ? 'Signing...' : 'Sign PDF'}</span>
-                  </button>
-                  {!signature && (
-                    <p className="mt-1.5 text-center text-[11px] text-muted">
-                      Create a signature above to enable signing.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Placement stage — the hero */}
-              <div className="min-w-0 order-2 rounded-xl border border-card-border bg-surface shadow-sm overflow-hidden lg:sticky lg:top-24 self-start lg:max-h-[calc(100vh-8rem)]">
-                <div className="flex flex-wrap items-center justify-between gap-2 min-w-0 px-3.5 sm:px-4 py-3 border-b border-border">
-                  <span className="text-[13px] font-semibold truncate">
-                    Placement · {numPages !== null ? `page ${Math.min(previewPage, numPages)} of ${numPages}` : 'loading…'}
-                  </span>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
-                      disabled={numPages === null || previewPage <= 1}
-                      aria-label="Previous page"
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted hover:text-foreground hover:bg-surface-2 disabled:opacity-40 cursor-pointer transition-colors"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <input
-                      type="number"
-                      min={1}
-                      max={numPages ?? 1}
-                      value={previewPage}
-                      onChange={(e) => {
-                        const n = parseInt(e.target.value, 10)
-                        if (isNaN(n)) return
-                        setPreviewPage(numPages ? clamp(n, 1, numPages) : Math.max(1, n))
-                      }}
-                      aria-label="Preview page number"
-                      className="h-8 w-14 rounded-lg border border-border bg-surface px-1 text-center text-sm font-mono tabular-nums text-foreground focus:outline-none focus:border-accent"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setPreviewPage((p) => (numPages ? Math.min(numPages, p + 1) : p + 1))}
-                      disabled={numPages === null || (numPages !== null && previewPage >= numPages)}
-                      aria-label="Next page"
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted hover:text-foreground hover:bg-surface-2 disabled:opacity-40 cursor-pointer transition-colors"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-                <div className="p-3 sm:p-4">
-                  <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[62vh] lg:max-h-[72vh] overflow-y-auto overflow-x-hidden flex flex-col items-center">
-                    {pageError ? (
-                      <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-center">
-                        <AlertTriangle className="h-6 w-6 text-danger" />
-                        <p className="text-sm text-muted max-w-[36ch]">{pageError}</p>
-                      </div>
-                    ) : pageUrl ? (
-                      <div ref={placeRef} className="relative w-full max-w-[560px] select-none">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={pageUrl}
-                          alt={`PDF page ${previewPage} preview`}
-                          className="block w-full rounded-lg border border-card-border bg-background"
-                          draggable={false}
-                        />
-                        {pageLoading && (
-                          <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-overlay">
-                            <span className="animate-pulse-soft text-sm font-medium text-white">Loading page…</span>
-                          </div>
-                        )}
-                        {signature ? (
-                          <div
-                            onPointerDown={handleBoxDown}
-                            onPointerMove={handleBoxMove}
-                            onPointerUp={handleBoxUp}
-                            onPointerCancel={handleBoxUp}
-                            role="application"
-                            aria-label={`Signature box at ${cx.toFixed(0)} percent across, ${cy.toFixed(0)} percent down, rotated ${rotValue} degrees`}
-                            className="absolute cursor-move touch-none rounded-[2px] ring-2 ring-accent/80"
-                            style={{
-                              left: `${cx}%`,
-                              top: `${cy}%`,
-                              width: `${sigWidth}%`,
-                              aspectRatio: `${signature.aspect}`,
-                              transform: `translate(-50%, -50%) rotate(${rotValue}deg)`,
-                              containerType: 'inline-size',
-                            }}
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={signature.dataUrl}
-                              alt=""
-                              className="pointer-events-none block h-full w-full"
-                              draggable={false}
-                            />
-                            {addDate && (
-                              <div
-                                className={`pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-center leading-none text-muted ${
-                                  datePosition === 'above' ? 'bottom-full mb-1' : 'top-full mt-1'
-                                }`}
-                                style={{ fontSize: `${DATE_SIZE_MAP[dateSize]}cqw` }}
-                              >
-                                {dateText || todayStr}
-                              </div>
-                            )}
-                            <div
-                              onPointerDown={handleResizeDown}
-                              onPointerMove={handleResizeMove}
-                              onPointerUp={handleBoxUp}
-                              onPointerCancel={handleBoxUp}
-                              aria-label="Resize signature"
-                              className="absolute -bottom-2 -right-2 h-5 w-5 cursor-nwse-resize touch-none rounded-full border-2 border-accent bg-surface shadow"
-                            />
-                          </div>
-                        ) : (
-                          <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center px-4">
-                            <span className="rounded-full bg-overlay px-3.5 py-1.5 text-xs font-semibold text-white backdrop-blur-sm">
-                              Create your signature on the left to place it here
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="flex min-h-[280px] items-center justify-center">
-                        <span className="animate-pulse-soft text-sm text-muted">Rendering page…</span>
-                      </div>
-                    )}
-                    <p className="mt-2.5 text-center text-xs text-muted max-w-[52ch]">
-                      {isPagesAll
-                        ? `The signature will be stamped on all ${numPages ?? '…'} pages at this exact position.`
-                        : `The signature will be stamped on ${selectedPages.size} page${selectedPages.size === 1 ? '' : 's'} at this exact position.`}{' '}
-                      Drag the box to move it.
-                    </p>
-                  </div>
+                  <span className="shrink-0 text-sm text-muted">° clockwise</span>
                 </div>
               </div>
             </div>
-          </motion.div>
-        )}
 
-        {(isSubmitting || isDone || isError) && (
-          <motion.div
-            key="processing-state"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center py-6 text-center min-w-0"
-          >
-            {isSubmitting && (
-              <div className="w-full max-w-md min-w-0">
-                <ProgressBar progress={50} message="Signing PDF..." />
-              </div>
-            )}
-
-            {isDone && downloadUrl && (
-              <div className="flex flex-col items-center gap-4 min-w-0">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-1">
-                  <Download className="h-7 w-7" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-2xl font-bold">PDF Signed!</h3>
-                  <p className="text-sm text-muted mt-1">
-                    Your signed PDF is ready. Preview it to verify placement, then download.
-                  </p>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mt-2 w-full max-w-full justify-center items-stretch sm:items-center">
-                  <a
-                    href={downloadUrl ?? ''}
-                    download={fileName ?? undefined}
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-accent px-6 text-sm font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
-                  >
-                    <Download className="h-4 w-4" />
-                    <span>Download PDF</span>
-                  </a>
-                  <button
-                    onClick={() => setIsPreviewOpen(true)}
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border px-6 text-sm font-semibold hover:bg-surface-2 transition-colors cursor-pointer"
-                  >
-                    <Eye className="h-4 w-4" />
-                    <span>Preview PDF</span>
-                  </button>
-                  <button
-                    onClick={handleSignAnother}
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border px-6 text-sm font-semibold hover:bg-surface-2 transition-colors cursor-pointer"
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                    <span>Sign another</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {isError && (
-              <div className="flex flex-col items-center gap-4 min-w-0">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-1">
-                  <AlertTriangle className="h-7 w-7" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-2xl font-bold">Signing Failed</h3>
-                  <p className="text-sm text-muted mt-1 max-w-md">
-                    {submitError || 'An unexpected error occurred during processing.'}
-                  </p>
-                </div>
+            {/* 04 — Date */}
+            <div className="flex flex-col gap-3 min-w-0 rounded-xl border border-card-border bg-surface px-3.5 py-3 shadow-sm">
+              <div className="flex cursor-pointer items-center justify-between gap-3">
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <CalendarDays className="h-4 w-4 shrink-0 text-muted" />
+                  <span className="text-[13px] font-semibold">Add date under signature</span>
+                </span>
                 <button
-                  onClick={handleReset}
-                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-border px-6 text-sm font-semibold hover:bg-surface-2 transition-colors mt-2 cursor-pointer"
+                  type="button"
+                  role="switch"
+                  aria-checked={addDate}
+                  aria-label="Add date under signature"
+                  onClick={() => setAddDate(!addDate)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors cursor-pointer ${
+                    addDate ? 'bg-accent' : 'bg-surface-2 ring-1 ring-border'
+                  }`}
                 >
-                  <RefreshCw className="h-4 w-4" />
-                  <span>Try Again</span>
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      addDate ? 'left-[22px]' : 'left-0.5'
+                    }`}
+                  />
                 </button>
               </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+              {addDate && (
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex flex-col gap-3"
+                >
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="sign-date-text" className="text-[11px] font-bold text-muted uppercase tracking-wide">
+                      Date text
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="sign-date-text"
+                        type="text"
+                        value={dateText}
+                        onChange={(e) => setDateText(e.target.value)}
+                        placeholder={todayStr}
+                        maxLength={100}
+                        className="h-10 w-full min-w-0 rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted/70 focus:border-accent focus:outline-none transition-colors"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setDateText('')}
+                        className="inline-flex h-10 shrink-0 items-center rounded-lg border border-border px-2.5 text-xs font-semibold text-muted hover:text-foreground hover:bg-surface-2 cursor-pointer transition-colors"
+                      >
+                        Today
+                      </button>
+                    </div>
+                    <p className="text-[11px] leading-snug text-muted">Empty = today ({todayStr}).</p>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[11px] font-bold text-muted uppercase tracking-wide">Size</span>
+                    <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-2 p-1" role="group" aria-label="Date size">
+                      {(Object.keys(DATE_SIZE_MAP) as DateSize[]).map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          aria-pressed={dateSize === s}
+                          onClick={() => setDateSize(s)}
+                          className={`inline-flex h-9 items-center justify-center rounded-md text-[13px] font-semibold transition-colors cursor-pointer ${
+                            dateSize === s ? 'bg-surface text-foreground shadow-sm ring-1 ring-border' : 'text-muted hover:text-foreground'
+                          }`}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[11px] font-bold text-muted uppercase tracking-wide">Position</span>
+                    <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-2 p-1" role="group" aria-label="Date position">
+                      {(['below', 'above'] as const).map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          aria-pressed={datePosition === p}
+                          onClick={() => setDatePosition(p)}
+                          className={`inline-flex h-9 items-center justify-center rounded-md text-[13px] font-semibold capitalize transition-colors cursor-pointer ${
+                            datePosition === p ? 'bg-surface text-foreground shadow-sm ring-1 ring-border' : 'text-muted hover:text-foreground'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          </>
+        }
+        preview={{
+          title: `Placement · ${numPages !== null ? `page ${Math.min(previewPage, numPages)} of ${numPages}` : 'loading…'}`,
+          aside: (
+            <span className="inline-flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
+                disabled={numPages === null || previewPage <= 1}
+                aria-label="Previous page"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted hover:text-foreground hover:bg-surface-2 disabled:opacity-40 cursor-pointer transition-colors"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={numPages ?? 1}
+                value={previewPage}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  if (isNaN(n)) return
+                  setPreviewPage(numPages ? clamp(n, 1, numPages) : Math.max(1, n))
+                }}
+                aria-label="Preview page number"
+                className="h-8 w-14 rounded-lg border border-border bg-surface px-1 text-center text-sm font-mono tabular-nums text-foreground focus:outline-none focus:border-accent"
+              />
+              <button
+                type="button"
+                onClick={() => setPreviewPage((p) => (numPages ? Math.min(numPages, p + 1) : p + 1))}
+                disabled={numPages === null || (numPages !== null && previewPage >= numPages)}
+                aria-label="Next page"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted hover:text-foreground hover:bg-surface-2 disabled:opacity-40 cursor-pointer transition-colors"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </span>
+          ),
+          children: (
+            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[62vh] lg:max-h-[72vh] overflow-y-auto overflow-x-hidden flex flex-col items-center">
+              {pageError ? (
+                <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-center">
+                  <AlertTriangle className="h-6 w-6 text-danger" />
+                  <p className="text-sm text-muted max-w-[36ch]">{pageError}</p>
+                </div>
+              ) : pageUrl ? (
+                <div ref={placeRef} className="relative w-full max-w-[560px] select-none">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={pageUrl}
+                    alt={`PDF page ${previewPage} preview`}
+                    className="block w-full rounded-lg border border-card-border bg-background"
+                    draggable={false}
+                  />
+                  {pageLoading && (
+                    <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-overlay">
+                      <span className="animate-pulse-soft text-sm font-medium text-white">Loading page…</span>
+                    </div>
+                  )}
+                  {signature ? (
+                    <div
+                      onPointerDown={handleBoxDown}
+                      onPointerMove={handleBoxMove}
+                      onPointerUp={handleBoxUp}
+                      onPointerCancel={handleBoxUp}
+                      role="application"
+                      aria-label={`Signature box at ${cx.toFixed(0)} percent across, ${cy.toFixed(0)} percent down, rotated ${rotValue} degrees`}
+                      className="absolute cursor-move touch-none rounded-[2px] ring-2 ring-accent/80"
+                      style={{
+                        left: `${cx}%`,
+                        top: `${cy}%`,
+                        width: `${sigWidth}%`,
+                        aspectRatio: `${signature.aspect}`,
+                        transform: `translate(-50%, -50%) rotate(${rotValue}deg)`,
+                        containerType: 'inline-size',
+                      }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={signature.dataUrl}
+                        alt=""
+                        className="pointer-events-none block h-full w-full"
+                        draggable={false}
+                      />
+                      {addDate && (
+                        <div
+                          className={`pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-center leading-none text-muted ${
+                            datePosition === 'above' ? 'bottom-full mb-1' : 'top-full mt-1'
+                          }`}
+                          style={{ fontSize: `${DATE_SIZE_MAP[dateSize]}cqw` }}
+                        >
+                          {dateText || todayStr}
+                        </div>
+                      )}
+                      <div
+                        onPointerDown={handleResizeDown}
+                        onPointerMove={handleResizeMove}
+                        onPointerUp={handleBoxUp}
+                        onPointerCancel={handleBoxUp}
+                        aria-label="Resize signature"
+                        className="absolute -bottom-2 -right-2 h-5 w-5 cursor-nwse-resize touch-none rounded-full border-2 border-accent bg-surface shadow"
+                      />
+                    </div>
+                  ) : (
+                    <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center px-4">
+                      <span className="rounded-full bg-overlay px-3.5 py-1.5 text-xs font-semibold text-white backdrop-blur-sm">
+                        Create your signature on the left to place it here
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex min-h-[280px] items-center justify-center">
+                  <span className="animate-pulse-soft text-sm text-muted">Rendering page…</span>
+                </div>
+              )}
+              <p className="mt-2.5 text-center text-xs text-muted max-w-[52ch]">
+                {isPagesAll
+                  ? `The signature will be stamped on all ${numPages ?? '…'} pages at this exact position.`
+                  : `The signature will be stamped on ${selectedPages.size} page${selectedPages.size === 1 ? '' : 's'} at this exact position.`}{' '}
+                Drag the box to move it.
+              </p>
+            </div>
+          ),
+        }}
+      />
 
       {isDone && downloadUrl && (
         <PdfPreviewModal
@@ -1423,6 +1256,6 @@ export default function SignPage() {
           fileName={file?.name ? `${file.name.replace(/\.[^/.]+$/, '')}_signed.pdf` : 'signed.pdf'}
         />
       )}
-    </div>
+    </>
   )
 }

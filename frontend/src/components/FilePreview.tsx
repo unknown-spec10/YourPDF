@@ -25,7 +25,7 @@ export default function FilePreview({
   }
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface p-3.5 shadow-sm transition-colors duration-150 hover:border-accent/40">
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface p-3.5 shadow-sm transition-colors duration-150 hover:border-[var(--accent-signal)]">
       <div className="flex min-w-0 items-center gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
           <FileText className="h-5 w-5" />

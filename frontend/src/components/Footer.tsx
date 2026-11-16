@@ -10,7 +10,7 @@ export default function Footer() {
           <div className="max-w-xs">
             <p className="text-[15px] font-semibold tracking-tight text-foreground">YourPDF</p>
             <p className="mt-2 text-sm leading-relaxed text-muted">
-              Free, private PDF utilities. No accounts, no tracking, no data stored.
+              Free, open-source PDF utilities. Google sign-in, no tracking, no data stored.
             </p>
             <p className="mt-4 inline-flex items-center gap-2 text-xs font-medium text-muted">
               <span className="relative flex h-2 w-2">
@@ -24,7 +24,7 @@ export default function Footer() {
               {' · '}
               <a
                 href="mailto:conect.deeppodder@gmail.com"
-                className="transition-colors hover:text-foreground"
+                className="inline-flex min-h-6 items-center transition-colors hover:text-foreground"
               >
                 conect.deeppodder@gmail.com
               </a>
@@ -34,23 +34,23 @@ export default function Footer() {
           <nav className="grid grid-cols-2 gap-8 text-sm sm:gap-16" aria-label="Footer">
             <div className="flex flex-col gap-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted">Product</p>
-              <Link href="/tools" className="text-muted transition-colors hover:text-foreground">
+              <Link href="/tools" className="inline-flex min-h-6 items-center text-muted transition-colors hover:text-foreground">
                 All tools
               </Link>
-              <Link href="/how-it-works" className="text-muted transition-colors hover:text-foreground">
+              <Link href="/how-it-works" className="inline-flex min-h-6 items-center text-muted transition-colors hover:text-foreground">
                 How it works
               </Link>
             </div>
             <div className="flex flex-col gap-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted">Project</p>
-              <Link href="/how-it-works" className="text-muted transition-colors hover:text-foreground">
+              <Link href="/how-it-works#privacy" className="inline-flex min-h-6 items-center text-muted transition-colors hover:text-foreground">
                 Privacy
               </Link>
               <a
                 href="https://github.com/unknown-spec10/YourPDF"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-muted transition-colors hover:text-foreground"
+                className="inline-flex min-h-6 items-center text-muted transition-colors hover:text-foreground"
               >
                 GitHub
               </a>

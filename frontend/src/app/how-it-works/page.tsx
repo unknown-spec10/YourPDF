@@ -29,10 +29,11 @@ export default function HowItWorksPage() {
           <span>Back to home</span>
         </Link>
         <motion.h1
+          id="privacy"
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
-          className="text-3xl font-extrabold tracking-tight text-foreground md:text-4xl"
+          className="scroll-mt-24 text-3xl font-extrabold tracking-tight text-foreground md:text-4xl"
         >
           Privacy framework &amp; technology
         </motion.h1>

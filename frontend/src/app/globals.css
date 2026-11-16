@@ -1,38 +1,65 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 /*
- * Premium minimal design tokens — Linear / Vercel inspired.
- * Dark is the default theme (html.dark). Light is a clean paper theme.
+ * Premium minimal design tokens.
+ * Dark is the default theme (html.dark). Light is a warm paper theme: an off-white base with
+ * beige surfaces, chosen so the UI reads as paper rather than a blue-white screen.
  * Components must consume these tokens only; no literal palette classes.
+ *
+ * Every text token is measured against the *darkest* surface it can land on (surface-2), not
+ * just the background, and keeps at least 4.5:1. The accent is a bronze that holds 5.6:1 as
+ * text on the background and 6.2:1 with light text on top of it as a button.
  */
 
 :root {
-  --background: #fafafa;
-  --foreground: #0a0a0b;
-  --surface: #ffffff;
-  --surface-2: #f4f4f5;
-  --border: #e4e4e7;
-  --card-border: #e9e9ec;
+  --background: #f5f2eb;
+  --foreground: #1f211f;
+  --surface: #faf8f3;
+  --surface-2: #efece4;
+  --border: #e2ddd2;
+  --card-border: #e9e4da;
 
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-foreground: #ffffff;
-  --accent-subtle: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent: #b04e27;
+  --accent-hover: #9a4320;
+  --accent-foreground: #fff8f3;
+  /* The exact brand hex, for borders, rings and tints only: 3.29:1 as a non-text signal,
+     but only 3.67:1 against white text, so it is never a fill behind type. */
+  --accent-signal: #d46537;
+  --accent-subtle: color-mix(in srgb, var(--accent-signal) 8%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent-signal) 35%, transparent);
 
-  --muted: #52525b;
-  --muted-hover: #27272a;
+  --muted: #5c5f5b;
+  --muted-hover: #33352f;
 
-  --success: #059669;
-  --success-subtle: color-mix(in srgb, #059669 9%, transparent);
-  --warning: #b45309;
-  --warning-subtle: color-mix(in srgb, #d97706 10%, transparent);
-  --danger: #e11d48;
-  --danger-subtle: color-mix(in srgb, #e11d48 8%, transparent);
+  --success: #2f6b4f;
+  --success-subtle: color-mix(in srgb, #2f6b4f 10%, transparent);
+  --warning: #8a6100;
+  --warning-subtle: color-mix(in srgb, #8a6100 10%, transparent);
+  --danger: #b3261e;
+  --danger-subtle: color-mix(in srgb, #b3261e 9%, transparent);
 
-  --overlay: rgb(9 9 11 / 0.55);
-  --ring: color-mix(in srgb, var(--accent) 35%, transparent);
+  --overlay: rgb(31 33 31 / 0.55);
+  /* 78% instead of 35%: a focus outline has to clear 3:1 against the page to be perceivable
+     (WCAG 1.4.11); the previous value measured 1.65:1. */
+  /* Solid, not tinted: a ring at 70% alpha measured 2.28:1 and would have failed the 3:1
+     needed for a focus indicator. */
+  --ring: var(--accent-signal);
 
-  --accent-rgb: 79, 70, 229;
+  --accent-rgb: 176, 78, 39;
+
+  /* Semantic tints for the tool directory: three muted families so 16 identical cards become
+     scannable without shouting. Organise = terracotta, Convert = sage, Security = plum. */
+  --tint-organize: #8a6a1f;
+  --tint-organize-bg: color-mix(in srgb, #8a6a1f 11%, var(--surface));
+  --tint-organize-border: color-mix(in srgb, #8a6a1f 24%, var(--border));
+  --tint-convert: #3d6753;
+  --tint-convert-bg: color-mix(in srgb, #4a7c62 11%, var(--surface));
+  --tint-convert-border: color-mix(in srgb, #4a7c62 22%, var(--border));
+  --tint-security: #6b4a70;
+  --tint-security-bg: color-mix(in srgb, #7c5583 11%, var(--surface));
+  --tint-security-border: color-mix(in srgb, #7c5583 22%, var(--border));
 
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
@@ -40,44 +67,57 @@
   --radius-xl: 1.25rem;
   --radius-2xl: 1.5rem;
 
-  --shadow-sm: 0 1px 2px rgb(9 9 11 / 0.05);
-  --shadow-md: 0 4px 16px -4px rgb(9 9 11 / 0.08), 0 2px 6px -2px rgb(9 9 11 / 0.05);
-  --shadow-lg: 0 12px 32px -12px rgb(9 9 11 / 0.16);
-  --shadow-accent: 0 8px 24px -8px rgb(79 70 229 / 0.35);
+  /* Warm shadows: neutral grey shadows over a beige page read as dirty edges. */
+  --shadow-sm: 0 1px 2px rgb(74 60 38 / 0.06);
+  --shadow-md: 0 4px 16px -4px rgb(74 60 38 / 0.1), 0 2px 6px -2px rgb(74 60 38 / 0.06);
+  --shadow-lg: 0 12px 32px -12px rgb(74 60 38 / 0.18);
+  --shadow-accent: 0 8px 24px -8px rgb(212 101 55 / 0.28);
 }
 
 .dark {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --surface: #101013;
-  --surface-2: #18181c;
-  --border: #232329;
-  --card-border: #212126;
+  --background: #161614;
+  --foreground: #f3f0e8;
+  --surface: #1f1e1c;
+  --surface-2: #292825;
+  --border: #33312d;
+  --card-border: #383631;
 
-  --accent: #818cf8;
-  --accent-hover: #a5b4fc;
-  --accent-foreground: #0a0a0f;
-  --accent-subtle: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent: #e07a4f;
+  --accent-hover: #eb8960;
+  --accent-foreground: #161614;
+  --accent-signal: #e07a4f;
+  --accent-subtle: color-mix(in srgb, var(--accent-signal) 12%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent-signal) 40%, transparent);
 
-  --muted: #a1a1aa;
-  --muted-hover: #e4e4e7;
+  --muted: #a39f95;
+  --muted-hover: #e8e4da;
 
-  --success: #34d399;
-  --success-subtle: color-mix(in srgb, #34d399 12%, transparent);
-  --warning: #fbbf24;
-  --warning-subtle: color-mix(in srgb, #fbbf24 12%, transparent);
-  --danger: #fb7185;
-  --danger-subtle: color-mix(in srgb, #fb7185 12%, transparent);
+  --success: #6fbf8b;
+  --success-subtle: color-mix(in srgb, #6fbf8b 12%, transparent);
+  --warning: #e3b341;
+  --warning-subtle: color-mix(in srgb, #e3b341 12%, transparent);
+  --danger: #f87171;
+  --danger-subtle: color-mix(in srgb, #f87171 12%, transparent);
 
-  --overlay: rgb(0 0 0 / 0.62);
-  --ring: color-mix(in srgb, var(--accent) 45%, transparent);
+  --overlay: rgb(0 0 0 / 0.66);
+  --ring: var(--accent-signal);
 
-  --accent-rgb: 129, 140, 248;
+  --accent-rgb: 224, 122, 79;
+
+  --tint-organize: #d9a94e;
+  --tint-organize-bg: color-mix(in srgb, #d9a94e 14%, var(--surface));
+  --tint-organize-border: color-mix(in srgb, #d9a94e 28%, var(--border));
+  --tint-convert: #8fc0a4;
+  --tint-convert-bg: color-mix(in srgb, #8fc0a4 14%, var(--surface));
+  --tint-convert-border: color-mix(in srgb, #8fc0a4 26%, var(--border));
+  --tint-security: #c2a0cc;
+  --tint-security-bg: color-mix(in srgb, #c2a0cc 14%, var(--surface));
+  --tint-security-border: color-mix(in srgb, #c2a0cc 26%, var(--border));
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-md: 0 4px 16px -4px rgb(0 0 0 / 0.5);
   --shadow-lg: 0 16px 40px -12px rgb(0 0 0 / 0.6);
-  --shadow-accent: 0 8px 28px -8px rgb(129 140 248 / 0.35);
+  --shadow-accent: 0 8px 28px -8px rgb(224 122 79 / 0.3);
 }
 
 @theme inline {
@@ -118,6 +158,15 @@
 
 html {
   scroll-behavior: smooth;
+  /* The navbar is 4rem tall and sticky; without this, `#hash` links and in-page jumps land with
+     their target hidden underneath it. */
+  scroll-padding-top: 5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 body {
@@ -129,6 +178,7 @@ body {
   text-rendering: optimizeLegibility;
   transition: background-color 0.25s ease, color 0.25s ease;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow-x: clip;
@@ -316,4 +366,95 @@ p {
   font-weight: 400;
   font-style: normal;
   font-display: swap;
+}
+
+/* --- Native dialog modals -------------------------------------------------------------
+   The preview and zoom overlays are real <dialog> elements opened with showModal(), so the
+   browser owns the focus trap, the inert background, Esc and the back gesture. These two rules
+   are what stop a scroll gesture inside the dialog from scrolling the page behind it. */
+/* A closed <dialog> must not paint. The UA hides it with `display: none`, but any author
+   `display` utility on the element (e.g. `flex`) outranks that rule, so a mounted-but-closed
+   preview used to float over the page. Set the layout here instead, keyed on [open]. */
+dialog[open] {
+  display: flex;
+}
+
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: color-mix(in srgb, var(--background) 70%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+/* --- Indeterminate spinner on a native <progress> -------------------------------------
+   A job is one synchronous POST with no progress channel, so it is always indeterminate: the
+   element carries the semantics and the styles replace the UA bar with a ring. */
+progress.spinner:indeterminate {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  background: none;
+  animation: spinner-rotate 0.9s linear infinite;
+}
+
+progress.spinner:indeterminate::-webkit-progress-bar,
+progress.spinner:indeterminate::-webkit-progress-value,
+progress.spinner:indeterminate::-moz-progress-bar {
+  display: none;
+  background: none;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  progress.spinner:indeterminate {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  progress.spinner:indeterminate {
+    forced-color-adjust: none;
+    border-color: CanvasText;
+    border-top-color: Highlight;
+  }
+}
+
+/* Tool-directory tints. Plain classes so the cards stay declarative and the palette lives in one
+   place; the icon keeps a 3:1 contrast against its own tinted chip. */
+.tone-organize {
+  color: var(--tint-organize);
+  background-color: var(--tint-organize-bg);
+  border-color: var(--tint-organize-border);
+}
+.tone-convert {
+  color: var(--tint-convert);
+  background-color: var(--tint-convert-bg);
+  border-color: var(--tint-convert-border);
+}
+.tone-security {
+  color: var(--tint-security);
+  background-color: var(--tint-security-bg);
+  border-color: var(--tint-security-border);
+}
+
+/* Touch devices have no hover state, so anything revealed only on hover is invisible there.
+   The card arrow is decorative, but on a phone it is the only affordance hint. */
+@media (hover: none) {
+  .group .card-arrow {
+    opacity: 1;
+    transform: none;
+  }
 }

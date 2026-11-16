@@ -1,11 +1,10 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
-import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Layers, ArrowUp, ArrowDown, X, Download, RefreshCw, AlertTriangle, Plus, Eye, ZoomIn, FileText, ArrowLeftRight, ListOrdered, ArrowUpDown } from 'lucide-react'
-import DropZone from '@/components/DropZone'
-import ProgressBar from '@/components/ProgressBar'
+import { motion } from 'framer-motion'
+import { Layers, ArrowUp, ArrowDown, X, Plus, ZoomIn, FileText, ArrowLeftRight, ListOrdered, ArrowUpDown } from 'lucide-react'
+import ZoomDialog from '@/components/tool/ZoomDialog'
+import ToolShell, { PreviewAction } from '@/components/tool/ToolShell'
 import { useFileJob } from '@/hooks/useFileJob'
 import { apiClient, submitJob, buildMultiFileFormData } from '@/lib/api'
 import PdfPreviewModal from '@/components/PdfPreviewModal'
@@ -153,12 +152,14 @@ export default function MergePage() {
   const keyCounter = useRef(0)
   const blockCounter = useRef(0)
   const urlsRef = useRef<Record<string, string>>({})
-  urlsRef.current = fileUrls
+  // Kept in an effect rather than assigned during render (React forbids the latter).
+  useEffect(() => {
+    urlsRef.current = fileUrls
+  }, [fileUrls])
 
   useEffect(() => {
-    const snapshot = urlsRef.current
     return () => {
-      Object.values(snapshot).forEach((url) => {
+      Object.values(urlsRef.current).forEach((url) => {
         try {
           URL.revokeObjectURL(url)
         } catch {
@@ -419,36 +420,38 @@ export default function MergePage() {
   const visibleTiles = outputTiles.slice(0, TILE_CAP)
   const hiddenCount = Math.max(0, outputTiles.length - visibleTiles.length)
 
+  const [formError, setFormError] = useState<string | null>(null)
+
+
   const handleSubmit = async () => {
+    setFormError(null)
     if (files.length < 2) {
-      alert('Please select at least 2 PDF files to merge.')
+      setFormError('Please select at least 2 PDF files to merge.')
       return
     }
     if (mode === 'custom') {
       if (blocks.length === 0) {
-        alert('Add at least one sequence block to merge.')
+        setFormError('Add at least one sequence block to merge.')
         return
       }
       if (countsLoading) {
-        alert('Still reading page counts. Please wait a moment and try again.')
+        setFormError('Still reading page counts. Please wait a moment and try again.')
         return
       }
       const badIndex = blockDetails.findIndex((d) => !d.validation.valid || d.fileIndex < 0)
       if (badIndex >= 0) {
-        alert(blockDetails[badIndex].validation.error ?? 'One or more page ranges are invalid.')
+        setFormError(blockDetails[badIndex].validation.error ?? 'One or more page ranges are invalid.')
         return
       }
       const plan = blockDetails.map((d) => ({ file: d.fileIndex, pages: d.block.pages.trim() }))
-      const ok = await submit({ files, plan: JSON.stringify(plan) })
-      if (!ok) {
-        alert('Failed to initialize merge task. Please check server connection.')
-      }
+      // The shell's error state renders whatever the server or the network failure was;
+      // a second modal blaming "server connection" was both redundant and often wrong.
+      await submit({ files, plan: JSON.stringify(plan) })
       return
     }
-    const ok = await submit({ files })
-    if (!ok) {
-      alert('Failed to initialize merge task. Please check server connection.')
-    }
+      // The shell's error state renders the real failure; a second modal blaming the
+      // server connection was redundant and often wrong.
+      await submit({ files })
   }
 
   const handleReset = () => {
@@ -543,90 +546,33 @@ export default function MergePage() {
     </div>
   )
 
+  const jobState = { isSubmitting, isDone, isError, submitError, downloadUrl, fileName }
+
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 py-6 sm:py-12 flex-1 flex flex-col justify-center">
-      {/* Header */}
-      <div className="mb-4 sm:mb-8">
-        <Link href="/tools" className="inline-flex items-center gap-2 text-sm text-muted hover:text-foreground mb-3 sm:mb-4 transition-colors">
-          <ArrowLeft className="h-4 w-4" />
-          <span>Back to all tools</span>
-        </Link>
-        <div className="flex items-center gap-2.5 sm:gap-3">
-          <div className="flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-accent/10 text-accent">
-            <Layers className="h-5 w-5 sm:h-6 sm:w-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Merge PDF</h1>
-            <p className="text-muted mt-0.5 sm:mt-1 text-sm">Combine multiple PDF files into one document in seconds.</p>
-          </div>
-        </div>
-        <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs text-muted lg:hidden">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 sm:px-3 py-0.5 sm:py-1 text-[11px] sm:text-xs font-semibold">
-            <span className="text-muted">01</span> Add files
-          </span>
-          <span className="text-muted">→</span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 sm:px-3 py-0.5 sm:py-1 text-[11px] sm:text-xs font-semibold">
-            <span className="text-muted">02</span> Arrange sequence
-          </span>
-          <span className="text-muted">→</span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 sm:px-3 py-0.5 sm:py-1 text-[11px] sm:text-xs font-semibold">
-            <span className="text-muted">03</span> Merge and download
-          </span>
-        </div>
-      </div>
-
-      {/* Main Box */}
-      <div className="rounded-2xl border border-card-border bg-surface p-3 sm:p-6 md:p-8 relative overflow-visible sm:overflow-hidden lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:overflow-visible">
-        <AnimatePresence mode="wait">
-          {files.length === 0 && !isDone && !isError && !isSubmitting && (
-            <motion.div
-              key="dropzone"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex flex-col gap-4 sm:gap-6 lg:items-center lg:py-12"
-            >
-              <div className="w-full lg:hidden">{modeToggle}</div>
-              <div className="hidden lg:flex flex-col items-center text-center gap-2 max-w-xl">
-                <h2 className="text-3xl font-bold tracking-tight">Merge PDFs into one file</h2>
-                <p className="text-sm text-muted leading-relaxed">Mix and match whole files or individual pages. Drop your PDFs below, arrange the order visually, then merge and download.</p>
-              </div>
-              <div className="flex flex-col gap-2 sm:gap-3 w-full lg:max-w-xl">
-                <div className="flex items-center gap-2 sm:gap-3 lg:hidden">
-                  <span className="text-xs font-bold uppercase tracking-widest text-muted">01</span>
-                  <h2 className="text-sm font-bold text-foreground">Add files</h2>
-                </div>
-                <DropZone onFileAccepted={handleFileAccepted} />
-                <p className="text-xs text-muted leading-relaxed text-center">
-                  Add two or more PDFs to begin. You will arrange the order visually, then merge and download.
-                </p>
-              </div>
-            </motion.div>
-          )}
-
-          {files.length > 0 && !isDone && !isError && !isSubmitting && (
-            <motion.div
-              key="file-list"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex flex-col gap-4 sm:gap-6"
-            >
-              {/* Slim add bar — the picker collapses into a thin strip once files exist */}
-              <div className="relative">
-                <div className="lg:[&>div>div]:min-h-12 lg:[&>div>div]:flex-row lg:[&>div>div]:items-center lg:[&>div>div]:justify-center lg:[&>div>div]:gap-2 lg:[&>div>div]:p-3 lg:[&>div>div>div]:hidden lg:[&>div>div>h3]:hidden lg:[&>div>div>p]:hidden">
-                  <DropZone
-                    onFileAccepted={handleFileAccepted}
-                    accept={{ 'application/pdf': ['.pdf'] }}
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="pointer-events-none absolute inset-0 hidden items-center justify-center gap-2 lg:flex" aria-hidden="true">
-                  <Plus className="h-4 w-4 text-muted" />
-                  <span className="text-sm font-semibold text-muted">Add more PDFs</span>
-                </div>
-              </div>
-
+    <>
+      <ToolShell
+        icon={<Layers className="h-5 w-5" />}
+        title="Merge PDF"
+        subtitle="Combine multiple PDF files into one document in seconds."
+        accept={{ 'application/pdf': ['.pdf'] }}
+        dropzoneText="Drop your PDFs here"
+        dropzoneHint="Add two or more PDFs to begin. You will arrange the order visually, then merge and download."
+        files={files}
+        onFilesAccepted={(next: File[]) => next.forEach(handleFileAccepted)}
+        onReset={handleReset}
+        onRetry={reset}
+        fileMeta={`${files.length} PDF${files.length === 1 ? '' : 's'} · ${
+          mode === 'custom' ? `${totalOutputPages} pages planned` : 'whole files'
+        }`}
+        job={jobState}
+        validationError={formError}
+        busyMessage="Merging PDF files..."
+        doneTitle="Merge Completed!"
+        doneBody="Your combined PDF file is ready. Click below to download."
+        downloadLabel="Download PDF"
+        doneActions={<PreviewAction onClick={() => setIsPreviewOpen(true)} />}
+        errorTitle="Merge Failed"
+        workspace={
               <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,440px)_minmax(0,1fr)] gap-4 sm:gap-6 lg:items-start">
                 {/* Stage 01 — Plan: mode toggle plus the sequence editor (single arrangement place) */}
               <motion.section
@@ -1021,83 +967,8 @@ export default function MergePage() {
                 </div>
               </div>
               </div>
-            </motion.div>
-          )}
-
-          {(isSubmitting || isDone || isError) && (
-            <motion.div
-              key="processing-state"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center py-6 text-center"
-            >
-              {isSubmitting && (
-                <div className="w-full max-w-md">
-                  <ProgressBar
-                    progress={50}
-                    message="Merging PDF files..."
-                  />
-                </div>
-              )}
-
-              {isDone && downloadUrl && (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success-subtle text-success mb-2">
-                    <Download className="h-7 w-7" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-bold">Merge Completed!</h3>
-                    <p className="text-sm text-muted mt-1">Your combined PDF file is ready. Click below to download.</p>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 w-full justify-center items-stretch sm:items-center">
-                    <a
-                      href={downloadUrl ?? ''}
-                      download={fileName ?? undefined}
-                      className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 font-semibold text-accent-foreground hover:bg-accent-hover transition-colors"
-                    >
-                      <Download className="h-4 w-4" />
-                      <span>Download PDF</span>
-                    </a>
-                    <button
-                      onClick={() => setIsPreviewOpen(true)}
-                      className="inline-flex h-11 items-center gap-2 rounded-xl border border-border px-6 font-semibold hover:bg-background transition-colors cursor-pointer"
-                    >
-                      <Eye className="h-4 w-4" />
-                      <span>Preview PDF</span>
-                    </button>
-                    <button
-                      onClick={handleReset}
-                      className="inline-flex h-11 items-center gap-2 rounded-xl border border-border px-6 font-semibold hover:bg-background transition-colors cursor-pointer"
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                      <span>Merge More Files</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {isError && (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-danger-subtle text-danger mb-2">
-                    <AlertTriangle className="h-7 w-7" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-bold">Merge Failed</h3>
-                    <p className="text-sm text-muted mt-1">{submitError || 'Failed to merge PDF files.'}</p>
-                  </div>
-                  <button
-                    onClick={handleReset}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl border border-border px-6 font-semibold hover:bg-background transition-colors mt-4 cursor-pointer"
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                    <span>Try Again</span>
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+        }
+      />
 
       {isDone && downloadUrl && (
         <PdfPreviewModal
@@ -1109,31 +980,20 @@ export default function MergePage() {
       )}
 
       {/* Click-to-zoom source page modal */}
-      {zoom !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-overlay backdrop-blur-sm">
-          <div className="relative w-full max-w-4xl min-w-0 h-[85vh] max-h-[85vh] rounded-2xl border border-card-border bg-surface flex flex-col p-4 sm:p-6 shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between mb-4 gap-3 min-w-0">
-              <div className="flex flex-col min-w-0">
-                <h3 className="text-base sm:text-lg font-bold text-foreground truncate">{zoom.title}</h3>
-                <p className="text-xs text-muted truncate">{zoom.subtitle}</p>
-              </div>
-              <button
-                onClick={() => setZoom(null)}
-                className="text-muted hover:text-foreground cursor-pointer transition-colors px-4 py-2 rounded-xl border border-border bg-background hover:bg-surface-2 text-sm font-semibold shrink-0"
-              >
-                Close
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 w-full rounded-xl border border-card-border overflow-hidden bg-background">
-              <iframe
-                src={`${zoom.fileUrl}#page=${zoom.page}&toolbar=1&navpanes=0`}
-                className="w-full h-full border-0"
-                title={zoom.title}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <ZoomDialog
+        open={zoom !== null}
+        onClose={() => setZoom(null)}
+        title={zoom?.title ?? 'Page preview'}
+        subtitle={zoom?.subtitle}
+      >
+        {zoom && (
+          <iframe
+            src={`${zoom.fileUrl}#page=${zoom.page}&toolbar=1&navpanes=0`}
+            className="w-full h-full border-0"
+            title={zoom.title}
+          />
+        )}
+      </ZoomDialog>
+    </>
   )
 }

@@ -1,8 +1,10 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
+import { stashFile } from '@/lib/handoff'
 import {
   FileSpreadsheet,
   Scissors,
@@ -19,8 +21,6 @@ import {
   Hash,
   Eye,
   ArrowRight,
-  Cpu,
-  Server,
   Crop,
   Maximize,
   RefreshCw,
@@ -34,128 +34,132 @@ interface Tool {
   description: string
   href: string
   icon: React.ComponentType<{ className?: string }>
-  type: 'client' | 'server'
+  tone: 'organize' | 'convert' | 'security'
 }
 
 type Category = 'pdf' | 'image' | 'office'
 
+const CATEGORY_LABEL: Record<Category, string> = { pdf: 'PDF', image: 'image', office: 'Office' }
+
 export default function ToolsPage() {
   const [activeCategory, setActiveCategory] = useState<Category>('pdf')
   const [query, setQuery] = useState('')
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const router = useRouter()
 
   const pdfTools: Tool[] = [
     {
       name: 'Merge PDF',
       description: 'Combine multiple PDF files into one document in seconds.',
       href: '/merge',
+    tone: 'organize',
       icon: Layers,
-      type: 'client',
-    },
+        },
     {
       name: 'Split PDF',
       description: 'Extract specific page ranges or split every page into separate PDFs.',
       href: '/split',
+    tone: 'organize',
       icon: Scissors,
-      type: 'client',
-    },
+        },
     {
       name: 'Compress PDF',
       description: 'Reduce PDF file size while maintaining maximum quality.',
       href: '/compress',
+    tone: 'convert',
       icon: FileSpreadsheet,
-      type: 'server',
-    },
+        },
     {
       name: 'PDF to Images',
       description: 'Convert PDF pages into clean, high-quality PNG or JPG files.',
       href: '/pdf-to-images',
+    tone: 'convert',
       icon: ImageIcon,
-      type: 'server',
-    },
+        },
     {
       name: 'Images to PDF',
       description: 'Convert JPG, PNG, and other images into a single PDF document.',
       href: '/images-to-pdf',
+    tone: 'convert',
       icon: FileImage,
-      type: 'server',
-    },
+        },
     {
       name: 'Extract Text',
       description: 'Extract raw text content from your PDF documents instantly.',
       href: '/extract-text',
+    tone: 'convert',
       icon: FileText,
-      type: 'client',
-    },
+        },
     {
       name: 'PDF to Word',
       description: 'Convert PDF pages to clean, editable DOCX files.',
       href: '/pdf-to-docx',
+    tone: 'convert',
       icon: FileText,
-      type: 'server',
-    },
+        },
     {
       name: 'Word to PDF',
       description: 'Convert DOCX documents to high-quality PDF files.',
       href: '/docx-to-pdf',
+    tone: 'convert',
       icon: File,
-      type: 'server',
-    },
+        },
     {
       name: 'Protect PDF',
       description: 'Add a password to encrypt and secure your PDF document.',
       href: '/protect',
+    tone: 'security',
       icon: Lock,
-      type: 'server',
-    },
+        },
     {
       name: 'Unlock PDF',
       description: 'Remove password protection and security restrictions from your PDF.',
       href: '/unlock',
+    tone: 'security',
       icon: Unlock,
-      type: 'server',
-    },
+        },
     {
       name: 'Rotate PDF',
       description: 'Rotate individual or all pages inside your PDF document.',
       href: '/rotate',
+    tone: 'organize',
       icon: RotateCw,
-      type: 'server',
-    },
+        },
     {
       name: 'Organize PDF',
       description: 'Rearrange, delete, or reorder pages in your PDF document.',
       href: '/organize',
+    tone: 'organize',
       icon: Grid,
-      type: 'server',
-    },
+        },
     {
       name: 'Watermark PDF',
       description: 'Add a text watermark overlay to every page in your PDF.',
       href: '/watermark',
+    tone: 'security',
       icon: Type,
-      type: 'server',
-    },
+        },
     {
       name: 'Add Page Numbers',
       description: 'Stamp dynamic page numbers onto your PDF headers or footers.',
       href: '/add-page-numbers',
+    tone: 'organize',
       icon: Hash,
-      type: 'server',
-    },
+        },
     {
       name: 'OCR PDF',
       description: 'Convert scanned PDF documents into searchable text PDFs.',
       href: '/ocr',
+    tone: 'convert',
       icon: Eye,
-      type: 'server',
-    },
+        },
     {
       name: 'Sign PDF',
       description: 'Draw, type, or upload a signature and stamp it onto your PDF.',
       href: '/sign',
+    tone: 'security',
       icon: PenLine,
-      type: 'server',
-    },
+        },
   ]
 
   const imageTools: Tool[] = [
@@ -163,44 +167,44 @@ export default function ToolsPage() {
       name: 'Compress Image',
       description: 'Reduce image file sizes for JPG, PNG, and WEBP with customizable quality levels.',
       href: '/compress-image',
+    tone: 'convert',
       icon: FileSpreadsheet,
-      type: 'server',
-    },
+        },
     {
       name: 'Resize Image',
       description: 'Resize image dimensions by percentage or specific pixel dimensions.',
       href: '/resize-image',
+    tone: 'convert',
       icon: Maximize,
-      type: 'server',
-    },
+        },
     {
       name: 'Crop Image',
       description: 'Crop and trim specific areas of your images interactively.',
       href: '/crop-image',
+    tone: 'convert',
       icon: Crop,
-      type: 'server',
-    },
+        },
     {
       name: 'Convert Image',
       description: 'Convert images to PNG, JPG, WEBP, BMP, or TIFF formats.',
       href: '/convert-image',
+    tone: 'convert',
       icon: RefreshCw,
-      type: 'server',
-    },
+        },
     {
       name: 'Rotate Image',
       description: 'Rotate images by 90, 180, or 270 degrees.',
       href: '/rotate-image',
+    tone: 'organize',
       icon: RotateCw,
-      type: 'server',
-    },
+        },
     {
       name: 'Watermark Image',
       description: 'Add a custom text watermark overlay to your images.',
       href: '/watermark-image',
+    tone: 'security',
       icon: Type,
-      type: 'server',
-    },
+        },
   ]
 
   const officeTools: Tool[] = [
@@ -208,37 +212,37 @@ export default function ToolsPage() {
       name: 'Merge Word',
       description: 'Combine multiple Word documents (.docx) into a single document.',
       href: '/merge-docx',
+    tone: 'organize',
       icon: FileText,
-      type: 'server',
-    },
+        },
     {
       name: 'Word to Images',
       description: 'Convert your Word document pages into PNG or JPG image files.',
       href: '/docx-to-images',
+    tone: 'convert',
       icon: ImageIcon,
-      type: 'server',
-    },
+        },
     {
       name: 'PPT to PDF',
       description: 'Convert PowerPoint presentations (.pptx) into high-quality PDF files.',
       href: '/pptx-to-pdf',
+    tone: 'convert',
       icon: File,
-      type: 'server',
-    },
+        },
     {
       name: 'PPT to Images',
       description: 'Convert PowerPoint slides into clean PNG or JPG images.',
       href: '/pptx-to-images',
+    tone: 'convert',
       icon: FileImage,
-      type: 'server',
-    },
+        },
     {
       name: 'Merge PPT',
       description: 'Combine multiple PowerPoint slide decks (.pptx) into a single presentation.',
       href: '/merge-pptx',
+    tone: 'organize',
       icon: Layers,
-      type: 'server',
-    },
+        },
   ]
 
   const containerVariants = {
@@ -278,9 +282,9 @@ export default function ToolsPage() {
   }, [allTools, activeCategory, query])
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-5 py-12 sm:px-6 md:py-16">
+    <div className="mx-auto w-full max-w-6xl px-5 py-10 sm:px-6 md:py-12">
       {/* Title */}
-      <section className="mb-8 md:mb-10">
+      <section className="mb-6 md:mb-7">
         <motion.h1
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -300,7 +304,7 @@ export default function ToolsPage() {
       </section>
 
       {/* Controls: tabs + search */}
-      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex gap-1 rounded-xl border border-border bg-surface p-1 sm:w-fit" role="tablist" aria-label="Tool categories">
           {categories.map((cat) => {
             const Icon = cat.icon
@@ -347,14 +351,12 @@ export default function ToolsPage() {
 
       {/* Result count */}
       <p className="mb-4 text-[13px] font-medium text-muted" aria-live="polite">
-        {displayedTools.length} {displayedTools.length === 1 ? 'tool' : 'tools'}
+        {displayedTools.length} {CATEGORY_LABEL[activeCategory]} {displayedTools.length === 1 ? 'tool' : 'tools'}
         {query.trim() ? (
           <>
             {' '}matching <span className="text-foreground">“{query.trim()}”</span>
           </>
-        ) : (
-          <> in {activeCategory}</>
-        )}
+        ) : null}
       </p>
 
       {/* Grid of Tools with Animated Transition */}
@@ -385,7 +387,7 @@ export default function ToolsPage() {
               variants={containerVariants}
               initial="hidden"
               animate="show"
-              className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"
+              className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
             >
               {displayedTools.map((tool) => {
                 const Icon = tool.icon
@@ -393,44 +395,43 @@ export default function ToolsPage() {
                   <motion.div key={tool.name} variants={itemVariants}>
                     <Link
                       href={tool.href}
-                      className="group flex h-full flex-col rounded-2xl border border-border bg-surface p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-lg"
+                      // Drop a file straight on the card: it is stashed in IndexedDB and picked up
+                      // by the destination page, so the user skips the empty upload state.
+                      onDragOver={(event) => {
+                        if (!event.dataTransfer.types.includes('Files')) return
+                        event.preventDefault()
+                        setDropTarget(tool.href)
+                      }}
+                      onDragLeave={() => setDropTarget(null)}
+                      onDrop={async (event) => {
+                        const dropped = event.dataTransfer.files?.[0]
+                        if (!dropped) return
+                        event.preventDefault()
+                        setDropTarget(null)
+                        await stashFile(tool.href, dropped)
+                        router.push(tool.href)
+                      }}
+                      className={`group flex h-full flex-col rounded-2xl border bg-surface p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--accent-signal)] hover:shadow-lg ${
+                        dropTarget === tool.href
+                          ? 'border-[var(--accent-signal)] ring-2 ring-ring'
+                          : 'border-border'
+                      }`}
                     >
-                      {/* Badge */}
-                      <div className="mb-5 flex items-start justify-between gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-surface-2 text-foreground transition-colors duration-150 group-hover:border-accent/30 group-hover:text-accent">
-                          <Icon className="h-5 w-5" />
+                      {/* Icon and name share a line: the stacked version made every card ~45px
+                          taller, which pushed the fourth row below the fold at 1440x900. */}
+                      <div className="flex items-center gap-3">
+                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors duration-150 tone-${tool.tone}`}>
+                          <Icon className="h-[18px] w-[18px]" />
                         </div>
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                            tool.type === 'client'
-                              ? 'bg-success-subtle text-success'
-                              : 'bg-surface-2 text-muted ring-1 ring-border'
-                          }`}
-                        >
-                          {tool.type === 'client' ? (
-                            <>
-                              <Cpu className="h-3 w-3" />
-                              <span>Local</span>
-                            </>
-                          ) : (
-                            <>
-                              <Server className="h-3 w-3" />
-                              <span>Cloud secure</span>
-                            </>
-                          )}
-                        </span>
+                        <h3 className="flex min-w-0 items-center gap-1.5 text-[14px] font-semibold tracking-tight text-foreground">
+                          <span className="truncate">{tool.name}</span>
+                          <ArrowRight className="card-arrow h-3.5 w-3.5 shrink-0 -translate-x-1 text-accent opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-100 motion-reduce:transition-none" />
+                        </h3>
                       </div>
 
-                      {/* Content */}
-                      <div className="mt-auto">
-                        <h3 className="flex items-center gap-1.5 text-[15px] font-semibold tracking-tight text-foreground">
-                          <span>{tool.name}</span>
-                          <ArrowRight className="h-4 w-4 -translate-x-1 text-accent opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-100" />
-                        </h3>
-                        <p className="mt-1.5 text-sm leading-relaxed text-muted">
-                          {tool.description}
-                        </p>
-                      </div>
+                      <p className="mt-2 line-clamp-2 text-[13px] leading-snug text-muted">
+                        {tool.description}
+                      </p>
                     </Link>
                   </motion.div>
                 )

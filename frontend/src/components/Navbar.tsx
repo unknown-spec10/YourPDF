@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Sun, Moon, FileSpreadsheet, Menu, X } from 'lucide-react'
+import { Sun, Moon, Menu, X, ShieldCheck } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAppStore } from '@/lib/store'
 
@@ -30,6 +30,31 @@ export default function Navbar() {
   const { theme, toggleTheme, setTheme } = useAppStore()
   const [mounted, setMounted] = useState(false)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+
+  // Theme-aware favicon. The OS-driven `media` attributes cannot follow an in-app toggle, so the
+  // icon is swapped from the same state that drives the `dark` class. The tab icon then matches
+  // what the user is actually looking at, not what their desktop is set to.
+  useEffect(() => {
+    const href = theme === 'dark' ? '/brand/yourpdf-icon-dark.png' : '/brand/yourpdf-icon-light.png'
+    document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]').forEach((link) => {
+      link.href = href
+    })
+  }, [theme])
+
+  // The mobile panel is a disclosure, not a modal, so it needs no focus trap — but it does need
+  // the two things a keyboard user expects: Escape closes it, and focus lands back on the button
+  // that opened it instead of being dropped at the top of the document.
+  useEffect(() => {
+    if (!isMobileMenuOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setIsMobileMenuOpen(false)
+      menuButtonRef.current?.focus()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isMobileMenuOpen])
 
   // Avoid hydration mismatch by waiting until mounted on client
   useEffect(() => {
@@ -61,14 +86,26 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/70 bg-background/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-6">
-        {/* Logo */}
-        <Link href="/" className="group flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background shadow-sm transition-transform duration-200 group-hover:scale-105">
-            <FileSpreadsheet className="h-4.5 w-4.5" strokeWidth={2.2} />
-          </div>
-          <span className="text-[17px] font-semibold tracking-tight text-foreground">
-            YourPDF
-          </span>
+        {/* Logo. Two lockups rather than one tinted asset: the mark's black arm and the
+            wordmark's ink are part of the design, so a single recoloured file would lose the
+            contrast the brand relies on. Intrinsic width/height prevent a layout shift. */}
+        <Link href="/" className="group flex items-center" aria-label="YourPDF — home">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/yourpdf-lockup-light.png"
+            alt="YourPDF"
+            width={419}
+            height={140}
+            className="h-8 w-auto transition-transform duration-200 group-hover:scale-[1.02] dark:hidden"
+          />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/yourpdf-lockup-dark.png"
+            alt="YourPDF"
+            width={428}
+            height={140}
+            className="hidden h-8 w-auto transition-transform duration-200 group-hover:scale-[1.02] dark:block"
+          />
         </Link>
 
         {/* Navigation (Desktop) */}
@@ -99,6 +136,17 @@ export default function Navbar() {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
+          {/* Trust pill. It says what is actually true of this architecture: the file is uploaded,
+              processed and deleted when the response is returned. It deliberately does NOT claim
+              "files never leave your device" — that would be false for a server-side service. */}
+          <span
+            className="hidden items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-muted lg:inline-flex"
+            title="Files are processed on our server and deleted the moment your result is returned. No account history, no stored documents."
+          >
+            <ShieldCheck className="h-3.5 w-3.5 text-success" aria-hidden="true" />
+            Zero retention
+          </span>
+
           <a
             href="https://github.com/unknown-spec10/YourPDF"
             target="_blank"
@@ -125,6 +173,7 @@ export default function Navbar() {
 
           {/* Mobile Menu Toggle */}
           <button
+            ref={menuButtonRef}
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
             className="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground cursor-pointer md:hidden"
             aria-label="Toggle mobile menu"

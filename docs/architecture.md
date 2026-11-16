@@ -1,180 +1,141 @@
-# YourPDF Desktop — Architecture (As Built)
+# YourPDF — Architecture (as built)
 
-> The app is a Windows desktop build: a Tauri shell spawns a local FastAPI sidecar
-> and serves the UI itself; all processing runs locally and synchronously. The
-> webview only uploads files and downloads results. Privacy comes from locality plus
-> best-effort immediate cleanup of every upload and temp output. There is no hosted
-> deployment; the Cloud Run services were removed (deleted October 2026).
+A hosted web app: one container serves the Next.js static export and a FastAPI backend from a
+single origin. Every tool is one synchronous `POST` multipart that validates, processes inline
+and streams the result back. There is no database, no job queue, no result store and no object
+storage; an upload lives in `tmp/` only for the duration of its request.
 
-**Status:** Built and shipping. This document describes the code as it exists, not a plan.
+> The Windows desktop build (Tauri shell + frozen FastAPI sidecar on loopback) has been
+> retired. `docs/web-cloud-run.md` keeps the deployment analysis that outlived it.
 
-## 1. Stack summary
+## 1. Stack
 
 | Layer | Choice |
 |---|---|
-| Frontend | Next.js 16 App Router, TypeScript, Tailwind CSS, Framer Motion, react-dropzone, Zustand, Axios; static export (`output: "export"`, `trailingSlash: true`, `images.unoptimized`) |
-| Desktop shell | Tauri v2 (`desktop/src-tauri/` — Rust core + `bridge.js` init script); NSIS per-user installer; tag-driven CI with updater signing |
-| Sidecar | Frozen FastAPI via PyInstaller `--onedir` (`desktop/sidecar/serve.py` → `yourpdf-backend.exe`); serves the API at `/api` + `/api/v1` (and optionally the export at `/` when `YOURPDF_SERVE_STATIC=1`) |
-| Backend | Python 3.12, FastAPI (Uvicorn), pypdf + pikepdf + Ghostscript + Pillow + img2pdf + pdf2image + pdf2docx + reportlab + python-docx + python-pptx + ocrmypdf/Tesseract |
-| Job queue | None — fully synchronous, no Celery, no Redis, no Flower, no polling |
-| Storage | Local ephemeral processing (app tmp dir); no database; outputs returned as direct byte responses |
-| Native binaries | Bundled under `desktop/bin/` (Ghostscript, Tesseract, Poppler); `PATH` + `TESSDATA_PREFIX` set by the shell |
-| Distribution | Desktop installer only — no containers, no proxy, no hosted deployment |
+| Frontend | Next.js 16 App Router, TypeScript, Tailwind, Framer Motion, react-dropzone, Zustand; static export (`output: "export"`, `trailingSlash: true`, `images.unoptimized`) |
+| Backend | Python 3.12, FastAPI + Uvicorn, pypdf/pikepdf, Pillow, img2pdf, pdf2image, pdf2docx, reportlab, python-docx, python-pptx, ocrmypdf |
+| Native tools | Ghostscript, Poppler, Tesseract, ocrmypdf, LibreOffice — installed in the image, resolved from `PATH` |
+| Job model | None — synchronous request/response, no Celery, no Redis, no polling |
+| Storage | Process-local `tmp/`, wiped per request; no database, no bucket |
+| Hosting | One Cloud Run service behind IAP (`docs/web-cloud-run.md`) |
 
-## 2. Desktop runtime: Tauri → local FastAPI → bundled binaries
+## 2. Topology
 
 ```
-Tauri core (desktop/src-tauri/src/lib.rs)
-  1. generates a random per-launch token (rand, 32 alphanumeric chars)
-  2. spawns sidecar: packaged → resources/sidecar/yourpdf-backend/yourpdf-backend.exe
-                      dev      → $YOURPDF_PYTHON (or myenv) + desktop/sidecar/serve.py
-     env: YOURPDF_TOKEN, YOURPDF_TMP (= app-local-data/tmp),
-          YOURPDF_SERVE_STATIC=0 (the shell serves the export, not the sidecar),
-          CORS_ORIGINS=http://tauri.localhost,
-          PATH += bin/{gs,tesseract,poppler}, TESSDATA_PREFIX
-  3. waits for `YOURPDF_PORT <port>` on sidecar stdout (60 s timeout), then KEEPS
-     draining stdout — closing the pipe breaks the sidecar's next print(flush=True)
-  4. creates the window on the Tauri origin (static export), injecting
-     window.__YOURPDF_API__ + window.__YOURPDF_TOKEN__ before any page script runs
-  5. on quit: tree-kills the sidecar (taskkill /PID /T /F — child.kill()
-     would orphan gs/tesseract/soffice grandchildren holding tmp locks)
+Browser ── HTTPS ──► Cloud Run (one container, one origin)
+                      ├─ StaticFiles(frontend/out, html=True)  → /            (Next.js export)
+                      └─ FastAPI app (backend/app)             → /api, /api/v1, /health
+                            └─ shells out to gs · pdftoppm · tesseract · ocrmypdf · soffice
 ```
 
-The sidecar (`desktop/sidecar/serve.py`, additive — nothing in `backend/` is modified):
+Single origin is deliberate: no CORS preflight, no per-launch token, no second service to keep
+in sync. `web/serve.py` imports `app.main:app` unchanged and adds the static mount plus the RSC
+prefetch rewrite the Next.js 16 export needs.
 
-- Serves the API at `/api` + `/api/v1`. With `YOURPDF_SERVE_STATIC=1` it also mounts the
-  static export (`StaticFiles(OUT_DIR, html=True)`) at `/`, after the API routes, which is
-  handy for a plain-browser session. The desktop shell sets `YOURPDF_SERVE_STATIC=0` because
-  it serves the export itself, so the UI origin is `http://tauri.localhost` and the API is
-  cross-origin: the backend's CORS allow-list is set to that origin, and it exposes
-  `Content-Disposition`, `X-Job-Notice` and `X-OCR-Applied` (cross-origin JS cannot read
-  those headers otherwise).
-- Adds `LoopbackTokenMiddleware` (pure ASGI): every non-GET/HEAD API request must
-  present the per-launch `X-YourPDF-Token` (with a `?t=` query fallback); static
-  assets, `/_next/`, fonts, favicon/icons, `/health`, and
-  `/api/v1/capabilities` are exempt. Rationale, stated in code: loopback is not a
-  trust boundary — any local process or any web page can otherwise POST to it.
-- Adds desktop-only routes: `GET /api/v1/capabilities` (which native tools
-  resolve, with paths proving the bundled copies are in use) and
-  `POST /api/v1/cancel` (kills shelled-out children so a stuck merge/OCR actually stops).
-- Picks an ephemeral loopback port, then prints `YOURPDF_PORT <port>` only after
-  `/health` answers — the shell loads the URL immediately, so a premature print
-  would be a guaranteed `ERR_CONNECTION_REFUSED`.
-- Dispatches `[sys.executable, "-m", "ocrmypdf"]` argv into the bundled
-  `ocrmypdf.__main__.run` (frozen builds have no `ocrmypdf` console script).
-- Tracks in-flight `/api` calls with a watchdog (`YOURPDF_TIMEOUT` 120 s default,
-  300 s for OCR/LibreOffice/docx routes) that kills stale child processes.
-- Prunes `upload_*`/`output_*` tmp debris at startup; the shell also wipes the
-  tmp dir on launch (crash debris holds file locks).
-
-Downloads: tool result cards link to `blob:` URLs with no `download` attribute, and the
-webview's own download path reports success while writing nothing. `src-tauri/src/bridge.js`
-is injected into every window before page scripts: it intercepts `blob:` anchor clicks,
-fetches the bytes, and invokes `save_blob` with the bytes as the **raw invoke body**
-(metadata rides in headers — a JSON array would balloon a 30 MB file into ~100 MB of text).
-Rust writes the file to the user's Downloads folder, records it in `downloads.json`,
-broadcasts `yourpdf:saved`, and shows a notification. External `http(s)` links open in the
-system browser.
-
-Single-instance lock: a second launch focuses the existing window.
-
-## 3. Sync processing model
-
-Every endpoint follows one pattern: `POST` multipart → validate → process inline → return bytes in the same response.
+## 3. Request flow
 
 ```
-1. Tool page builds FormData (buildSingleFileFormData / buildMultiFileFormData in lib/api.ts)
-2. useFileJob submitter calls submitJob('/api/<endpoint>', formData)
-   → resolveApiPath() rewrites to canonical /api/v1/<endpoint>
-   → POST multipart to the loopback sidecar (token injected by the shell)
-3. Router validates (validation.py), saves upload to the app tmp dir (uploads.py),
-   calls the sync task function and blocks until it returns
-4. Router returns Response(bytes, Content-Disposition: attachment; filename="...")
-   (extract-text without export_txt returns JSON { text } instead)
-5. Frontend branches on content-type and exposes a blob object URL for download
-   → preload fetch → IPC save to Downloads
-6. Task finally-block calls cleanup_paths() — upload + temp output deleted best-effort
+1. Tool page builds FormData (buildSingleFileFormData / buildMultiFileFormData)
+2. useFileJob → submitJob('/api/<endpoint>', formData) → /api/v1/<endpoint>
+3. Router validates: per-file cap, aggregate cap, extension allowlist, render budget
+4. save_upload_file() writes upload_<uuid>.<ext> under tmp/
+5. Task runs inline and returns (bytes, download_name)
+6. Router returns a StreamingResponse with Content-Disposition: attachment
+   (extract-text without export returns {"text": ...} instead)
+7. finally: cleanup_paths(upload, output) — deleted on success and on failure
 ```
 
-There is no `202 { job_id }`, no `GET /status/{job_id}` polling, no `GET /download/{filename}`, no result backend, and no scheduled cleaner.
+No `202 {job_id}`, no `GET /status/{id}`, no `GET /download/{filename}`, no expiry worker.
 
-## 4. Backend layout (`backend/app/`)
+## 4. Upload and response size
 
-```
-app/
-├── main.py            # app wiring (see §5)
-├── config.py          # pydantic-settings: CORS origins, API key names
-├── uploads.py         # get_tmp_dir(), save_upload_file() / save_multi_upload() → tmp dir
-├── validation.py      # MAX_FILE_SIZE_MB=30, per-endpoint extension allowlists
-├── pdf_security.py    # protect_pdf_bytes / unlock_pdf_bytes (pypdf, in-memory)
-├── routers/
-│   ├── pdf.py         # /compress /merge (plan) /split /pdf-to-images (pages) /images-to-pdf
-│   │                  # /extract-text (layout) /pdf-to-docx (pdf2docx; scans OCR'd) /docx-to-pdf
-│   │                  # /protect /unlock (in-memory) /rotate (any angle) /organize
-│   │                  # /watermark (per-page) /sign (file, signature, pages, cx, cy, width, rotation, add_date)
-│   │                  # /add-page-numbers /ocr /pdf-info
-│   ├── image.py       # /image/compress /resize /crop /convert /rotate /watermark
-│   ├── office.py      # /office/merge-docx /docx-to-images /pptx-to-pdf
-│   │                  # /pptx-to-images /merge-pptx
-│   └── system.py      # health_router only: GET /health (no queue routes)
-└── tasks/
-    ├── pdf_tasks.py   # sync functions incl. merge planner, layout extract, pdf2docx, ocrmypdf
-    ├── image_tasks.py # sync Pillow functions
-    ├── office_tasks.py# sync LibreOffice conversions
-    └── common.py      # resolve_path, ensure_tmp_dir, cleanup_paths, read/write helpers,
-                       # SUBPROCESS_TIMEOUT=600 for Ghostscript/LibreOffice/ocrmypdf
-```
+The host caps an HTTP/1.1 request at 32 MiB and a **non-chunked** response at 32 MiB. Both
+constrain the design:
 
-`requirements.txt` is the human-edited floor; `requirements.lock` is the pinned install set (`pip install -r requirements.lock`). No Markdown-conversion dependency exists.
+- **Uploads:** 30 MB total per request (`validate_total_size`, applied to the four multi-file
+  endpoints) plus the existing 30 MB per-file check. That leaves ~2 MiB of headroom for
+  multipart framing under the platform ceiling.
+- **Responses:** every file response is a `StreamingResponse` (chunked, no `Content-Length`),
+  which the response cap does not apply to. This is what allows a 30 MB PDF to produce a
+  300 MB ZIP of page images. The body is still built in memory by the task, so the practical
+  ceiling is instance memory and the browser's blob buffer — which is why the render budget
+  exists.
 
-### Notable task behaviors
+## 5. Render budget
 
-- **Merge planner:** `merge_pdfs_task(paths, plan)` — empty `plan` appends whole files; otherwise `plan` is JSON `[{"file": idx, "pages": "1-3, 5" | "all" | "3-"}]` applied in order.
-- **Rotate:** `rotate_pdf_task(path, rotation: float)` — `-360…360` excl. `0`; multiples of 90 use `/Rotate`, other angles re-render via transform.
-- **Extract text:** `page.extract_text(extraction_mode="layout")` — layout-preserving; `export_txt=True` returns file bytes, else JSON.
-- **Watermark:** `watermark_pdf_task(..., pages="all")` — stamps only target pages parsed from `pages`.
-- **PDF to images:** `pdf_to_images_task(..., pages="all")` — renders only target pages parsed from `pages`; a single rendered image returns as a direct image, multiple return as a ZIP.
-- **Sign:** `sign_pdf_task(path, signature_path, pages="all", cx, cy, width, rotation, add_date)` — builds a transparent reportlab overlay of the signature image (plus an optional date line) sized/positioned/rotated from the `cx`/`cy`/`width` percentages and `rotation` float, then merges it onto only target pages parsed from `pages`; pages with a non-zero `/Rotate` get an un-rotation transform merge instead of a direct merge.
-- **OCR:** shells to `ocrmypdf --skip-text -l <lang>` with a 600 s timeout; missing binary → 500 "not installed or configured". Frozen desktop builds run `[sys.executable, "-m", "ocrmypdf"]` (see `pdf_tasks._ocrmypdf_argv`), dispatched by the sidecar into the bundled CLI.
-- **Protect/unlock:** never touch disk — `await file.read()` → `protect/unlock_pdf_bytes` → bytes.
+`validate_render_budget` (default 100 pages/slides per job, `MAX_RENDER_PAGES`) is enforced at
+three places, each at the earliest point the count is knowable:
 
-## 5. App wiring (`main.py` + sidecar additions)
-
-- 4 routers (`pdf`, `image`, `office`, `system`), each mounted twice: legacy prefix `/api` and canonical prefix `/api/v1`. New clients use `/api/v1`.
-- `health_router` mounted with no prefix → `GET /health` (open; the shell's readiness probe).
-- `CORSMiddleware` with explicit origins from `CORS_ORIGINS` (default `http://localhost:3000`), never `*`. Inert in the packaged app: frontend and API share one loopback origin, so no cross-origin requests occur.
-- `/static` serves `backend/static/` (local fallback).
-- `api_key_auth` HTTP middleware: when `API_KEY` is non-empty, every path starting with `/api/` requires a matching `X-API-Key` header (constant-time compare, 401, key never logged). `/health`, `/static/*`, `/docs` stay open. CORS preflights (`OPTIONS`) pass through. The desktop build leaves `API_KEY` unset (auth off) — loopback auth is the per-launch `X-YourPDF-Token` instead.
-- Sidecar-only additions (not in `backend/`): `LoopbackTokenMiddleware`,
-  `GET /api/v1/capabilities`, `POST /api/v1/cancel`, and the `/` static mount.
-
-## 6. Tmp / cleanup model
-
-- Uploads: `uploads.py` writes to `upload_<uuid>.<ext>` under the tmp dir (packaged: `%APPDATA%\YourPDF Desktop\tmp`; source dev: `backend/tmp/`) and returns the relative path.
-- Outputs: tasks write beside the upload (same tmp dir) or re-read into memory.
-- Cleanup: every task ends with `cleanup_paths(upload, output)` in a `finally` block — best-effort `os.remove`, missing/failed deletes ignored. Nothing survives the request on success or failure; there is no expiry job. The shell wipes tmp at startup and the sidecar prunes `upload_*`/`output_*` debris.
-- `SUBPROCESS_TIMEOUT = 600` bounds Ghostscript/LibreOffice/ocrmypdf so a crafted file can't hang a request slot forever; the sidecar watchdog additionally kills stale children (120 s default, 300 s for OCR/LibreOffice routes). Both the watchdog and `/api/v1/cancel` enumerate children via `child_pids()`, which skips `conhost.exe` — killing it breaks later console children with `0xC0000142`.
-
-## 7. Auth, same-origin, no-DB statelessness
-
-| Concern | Behavior |
+| Tool | When |
 |---|---|
-| Auth | Per-launch `X-YourPDF-Token` on all API routes (shell-injected at session level; `?t=` query fallback exists in the sidecar). The legacy shared `X-API-Key` middleware exists in `backend/` but is unset/unused in the desktop build |
-| CORS | Allow-list from `CORS_ORIGINS` env name (default `http://localhost:3000`); irrelevant in the packaged app — single loopback origin |
-| State | Stateless — no DB, no broker, no result store; tmp lives only for the request |
-| Validation | `validation.py`: 30 MB cap, per-endpoint extension allowlists, 400 on violation; protect/unlock require non-empty password |
-| Transport | Loopback HTTP on an ephemeral port; the token — not the port — is the trust mechanism |
+| `pdf-to-images` | after parsing the page spec, on the **selection** — rendering 2 of 500 pages is fine |
+| `pptx-to-images` | after LibreOffice conversion, counted from the converted PDF |
+| `docx-to-images` | after LibreOffice conversion — a DOCX has no page count before layout |
 
-## 8. Frontend structure (`frontend/src/`)
+The rejected job still deletes its upload (`cleanup_paths` runs in `finally`), so a 400 leaves
+no debris.
 
-- `next.config.ts`: `output: "export"` (static), `trailingSlash: true`, `images.unoptimized` — the sidecar serves `frontend/out` at `/`.
-- `lib/api.ts`: `API_URL` (`NEXT_PUBLIC_API_URL`, empty `""` in the desktop export → relative same-origin requests), `API_PREFIX` (`NEXT_PUBLIC_API_PREFIX`, default `/api/v1`), `resolveApiPath()` (rewrites legacy `/api/*` → `/api/v1/*`), `submitJob(endpoint, formData): Promise<Response>` — direct POST returning the raw response; `cancelActiveJob()` aborts the in-flight fetch and POSTs `/api/v1/cancel` so the sidecar kills its child tree; `buildSingleFileFormData()` / `buildMultiFileFormData()`; `parseFilenameFromDisposition()` for the download name. Legacy `X-API-Key` code paths exist but are inert (no key baked into the desktop export).
-- `hooks/useFileJob.ts`: the only job hook (no polling hook exists). `submit(args)` POSTs via the submitter, branches on `content-type` (JSON → `data`, bytes → `blob()` + `URL.createObjectURL` → `downloadUrl`), exposes `isSubmitting`/`isDone`/`isError`/`submitError`/`reset`. An `AbortError` is a cancel, not a failure: it clears the result state and returns to the workspace without setting an error. Revokes object URLs on reset/unmount.
-- 27 tool dirs under `src/app/`: add-page-numbers, compress, compress-image, convert-image, crop-image, docx-to-images, docx-to-pdf, extract-text, images-to-pdf, merge, merge-docx, merge-pptx, ocr, organize, pdf-to-docx, pdf-to-images, pptx-to-images, pptx-to-pdf, protect, resize-image, rotate, rotate-image, sign, split, unlock, watermark, watermark-image — plus `how-it-works`, `tools`, and the homepage. Every tool page is a `'use client'` component calling `submitJob` directly. PDF→Word preview uses `mammoth` (`convertToHtml`) in the browser. No Markdown tool exists.
+## 6. Auth, trust, state
 
-## 9. Distribution topologies
+| Concern | Behaviour |
+|---|---|
+| Access | **Identity-Aware Proxy** in front of the service: Google sign-in at the edge, no auth code in the app |
+| Trust inside | The container trusts its caller because IAP is the only ingress; no token middleware, no API key by default (`API_KEY` exists for a locked-down alternative) |
+| CORS | Irrelevant in the deployed shape (one origin); `CORS_ORIGINS` still supports a split static/API deployment |
+| State | Stateless per request; any instance can serve any request; no affinity needed |
+| Cleanup | `cleanup_paths()` in a `finally` block; the entrypoint also prunes `upload_*`/`output_*` debris at startup |
 
-- Packaged app (only distribution): Tauri shell + frozen sidecar + `desktop/bin/` + `desktop/licenses/`, installed per-user via NSIS. Logs: `%LOCALAPPDATA%\com.yourpdf.desktop\logs`; tmp: `%LOCALAPPDATA%\com.yourpdf.desktop\tmp`.
-- Local dev: backend `uvicorn` on 8000 + frontend `npm run dev -- --webpack` on 3000, all on the host; or full shell via `npm start` in `desktop/` against `frontend/out`. No compose services, no containers.
+## 7. Concurrency and sizing
 
-Build and smoke-test steps: `docs/desktop-build.md`.
+The work is CPU-bound and shells out to single-threaded tools, so Cloud Run runs with
+**concurrency 1**: one request per instance, no thrashing, no `soffice` OOM. `tmp/` is an
+in-memory filesystem there and counts against the memory limit, so the upload, the output and
+the streamed body are all RAM. Sizing table and cost sketch: `docs/web-cloud-run.md` §5.3.
+
+## 8. Layout
+
+```
+backend/app/
+├── main.py            # wiring: 4 routers × (/api, /api/v1), /health, /static, domain-error handler
+├── config.py          # CORS, API key, MAX_FILE_SIZE_MB, MAX_TOTAL_UPLOAD_MB, MAX_RENDER_PAGES
+├── errors.py          # DomainError / InvalidRequest → responses, mapped once in main.py
+├── limits.py          # per-file, aggregate, render budget; raises UploadTooLarge / RenderBudgetExceeded
+├── http_io.py         # file_response() (streamed) + MEDIA_TYPES — routers never build responses
+├── storage.py         # tmp_root() / ensure_tmp_dir() — one answer to where files live
+├── validation.py      # extension allowlists + image shape checks
+├── uploads.py         # persist uploads into the tmp dir
+├── pdf_security.py    # protect/unlock, in-memory
+├── routers/           # pdf.py, image.py, office.py, system.py — thin: parse → limits → task → file_response
+└── tasks/             # pdf_tasks.py, image_tasks.py, office_tasks.py, common.py — no FastAPI imports
+
+frontend/src/
+├── app/               # 27 tool pages + tools index + how-it-works (all client components)
+├── hooks/useFileJob.ts# POST → branch on content-type → blob URL or JSON
+└── lib/api.ts         # API_URL (same origin), resolveApiPath, submitJob, FormData builders
+
+web/
+├── serve.py           # entrypoint: static mount + API + $PORT
+└── tests/smoke_endpoints.py  # live 35-case suite
+```
+
+The HTTP/processing seam is deliberate: a task fails only by raising a `DomainError`, `main.py`
+maps those to status codes once, and the render budget can therefore be enforced *inside* a task
+— after a DOCX has actually been paginated. `tests/test_architecture.py` holds the line: no
+`Response(content=…)` in routers, no `fastapi` import in tasks, an aggregate cap on every
+multi-file endpoint, and the media table covering every extension a task can emit.
+
+## 9. Tests
+
+- `backend/tests` — 131 tests: endpoint roundtrips, validation, limits (`test_service_limits.py`),
+  signing geometry, merge plans, layout extraction, versioned/legacy path parity, plus
+  `test_architecture.py` guards on the module seams described above.
+- `web/tests/smoke_endpoints.py` — every endpoint against a running server; native-tool cases
+  SKIP when the binary is absent.
+- `frontend` — `tsc --noEmit`, ESLint, Vitest.
+
+## 10. Retired with the desktop build
+
+Local/offline processing and its "files never leave the machine" promise, the NSIS installer and
+updater, the per-launch loopback token, the frozen PyInstaller sidecar, the Windows-only Word
+COM fallback, and the CDP-driven smoke suite. None of them are missed by the service; the
+privacy statement changed from "nothing is uploaded" to "uploaded, processed, deleted".

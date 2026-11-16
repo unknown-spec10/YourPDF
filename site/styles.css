@@ -8,25 +8,26 @@
  */
 
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --surface: #101013;
-  --surface-2: #18181c;
-  --border: #232329;
-  --card-border: #212126;
+  --background: #161614;
+  --foreground: #f3f0e8;
+  --surface: #1f1e1c;
+  --surface-2: #292825;
+  --border: #33312d;
+  --card-border: #383631;
 
-  --accent: #818cf8;
-  --accent-hover: #a5b4fc;
-  --accent-foreground: #0a0a0f;
-  --accent-subtle: rgba(129, 140, 248, 0.12);
+  --accent: #e07a4f;
+  --accent-hover: #eb8960;
+  --accent-foreground: #161614;
+  --accent-signal: #e07a4f;
+  --accent-subtle: rgba(224, 122, 79, 0.12);
 
-  --muted: #a1a1aa;
-  --muted-hover: #e4e4e7;
+  --muted: #a39f95;
+  --muted-hover: #e8e4da;
 
-  --success: #34d399;
-  --success-subtle: rgba(52, 211, 153, 0.12);
-  --danger: #fb7185;
-  --danger-subtle: rgba(251, 113, 133, 0.12);
+  --success: #6fbf8b;
+  --success-subtle: rgba(111, 191, 139, 0.12);
+  --danger: #f87171;
+  --danger-subtle: rgba(248, 113, 113, 0.12);
 
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
@@ -37,7 +38,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 16px -4px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.6);
-  --shadow-accent: 0 8px 28px -8px rgba(129, 140, 248, 0.35);
+  --shadow-accent: 0 8px 28px -8px rgba(224, 122, 79, 0.3);
 
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
@@ -50,6 +51,12 @@
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+.brand-logo {
+  height: 30px;
+  width: auto;
+  display: block;
 }
 
 html {
@@ -90,7 +97,7 @@ svg {
 }
 
 ::selection {
-  background: rgba(129, 140, 248, 0.3);
+  background: rgba(224, 122, 79, 0.3);
   color: #fff;
 }
 
@@ -122,7 +129,7 @@ svg {
   left: 8%;
   width: 42rem;
   height: 42rem;
-  background: rgba(129, 140, 248, 0.07);
+  background: rgba(224, 122, 79, 0.07);
   animation: drift-a 26s ease-in-out infinite alternate;
 }
 
@@ -131,7 +138,7 @@ svg {
   bottom: -15%;
   width: 46rem;
   height: 46rem;
-  background: rgba(129, 140, 248, 0.05);
+  background: rgba(224, 122, 79, 0.05);
   filter: blur(150px);
   animation: drift-b 32s ease-in-out infinite alternate;
 }
@@ -286,8 +293,9 @@ svg {
 }
 
 .btn-primary {
-  background: var(--foreground);
-  color: var(--background);
+  /* The single brand action on the page, same rule as the app's tool CTAs. */
+  background: var(--accent);
+  color: var(--accent-foreground);
   box-shadow: var(--shadow-md);
 }
 
@@ -702,7 +710,7 @@ svg {
   border: 1px solid var(--border);
   border-radius: var(--radius-2xl);
   background:
-    radial-gradient(120% 140% at 0% 0%, rgba(129, 140, 248, 0.12), transparent 60%),
+    radial-gradient(120% 140% at 0% 0%, rgba(224, 122, 79, 0.12), transparent 60%),
     var(--surface);
   box-shadow: var(--shadow-sm);
 }

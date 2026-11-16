@@ -1,0 +1,120 @@
+name: Deploy Web
+
+# Builds the container, proves it works *inside* the image, then deploys to Cloud Run.
+#
+# Separate from `deploy.yml` (CI) on purpose: this one needs GCP credentials and is the only
+# workflow with `id-token: write`. It is path-filtered so a desktop-era doc change does not
+# roll a revision, and `concurrency` means overlapping pushes cancel rather than race for the
+# same service.
+# Required repository *variables* (Settings → Secrets and variables → Actions → Variables), none
+# of which are secrets:
+#   GCP_PROJECT_ID                 project that hosts the service
+#   GCP_REGION                     e.g. asia-south1
+#   GCP_SERVICE_NAME               e.g. yourpdf-web
+#   GCP_ARTIFACT_REPO              Artifact Registry repository name
+#   GCP_WORKLOAD_IDENTITY_PROVIDER full resource name of the WIF provider
+#   GCP_DEPLOY_SERVICE_ACCOUNT     service account used to deploy (roles/run.developer + AR writer)
+#   PUBLIC_SITE_URL                absolute origin baked into og:image/twitter metadata
+# Nothing is stored as a long-lived key: the job federates via OIDC.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/deploy-web.yml"
+
+permissions:
+  contents: read
+  id-token: write # Workload Identity Federation; no long-lived service-account key
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+env:
+  REGION: ${{ vars.GCP_REGION }}
+  SERVICE: ${{ vars.GCP_SERVICE_NAME }}
+  AR_REPO: ${{ vars.GCP_ARTIFACT_REPO }}
+  IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/${{ vars.GCP_SERVICE_NAME }}
+
+jobs:
+  deploy:
+    name: Build, smoke, deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+      - name: Build and push
+        id: build
+        run: |
+          docker build -f web/Dockerfile \
+            --build-arg NEXT_PUBLIC_SITE_URL="${{ vars.PUBLIC_SITE_URL }}" \
+            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker push --all-tags "$IMAGE"
+          # Deploy by digest: a tag can move, and a rollback needs the exact bytes.
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:${{ github.sha }}" | cut -d@ -f2)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke the image before it can reach users
+        # Runs the 35-case suite against the container itself and fails on a SKIP: a missing
+        # native tool (Impress, tessdata, ocrmypdf) must fail here, not on the first user's
+        # pptx. A green run on a machine without those tools proves nothing.
+        run: |
+          docker run -d --name smoke -p 8080:8080 "${{ steps.build.outputs.image }}"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/health
+          docker exec smoke python -m web.tests.smoke_endpoints --base http://127.0.0.1:8080 --fail-on-skip
+          # The export is git-ignored; assert the image actually serves it.
+          curl -fsS http://127.0.0.1:8080/ | grep -qi "YourPDF"
+          docker rm -f smoke
+
+      - name: Deploy to Cloud Run
+        # concurrency 1: the work is CPU-bound and shells out to single-threaded tools.
+        # timeout 900: must exceed the app's own SUBPROCESS_TIMEOUT (600 s) or a long OCR is
+        #   killed by the platform while the container keeps working.
+        # memory 4Gi: LibreOffice + OCR + a 100-page raster, with /tmp counted as RAM.
+        # IAP: the public model is Google sign-in; the service itself must refuse anonymous
+        #   callers so the gate cannot be bypassed by hitting the URL behind the proxy's back.
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image "${{ steps.build.outputs.image }}" \
+            --region "$REGION" \
+            --platform managed \
+            --port 8080 \
+            --cpu 2 \
+            --memory 4Gi \
+            --concurrency 1 \
+            --timeout 900 \
+            --min-instances 0 \
+            --max-instances 4 \
+            --cpu-boost \
+            --execution-environment gen2 \
+            --set-env-vars "YOURPDF_TMP=/tmp,HOME=/tmp,TMPDIR=/tmp,MAX_FILE_SIZE_MB=30,MAX_TOTAL_UPLOAD_MB=30,MAX_RENDER_PAGES=100,YOURPDF_OUT=/app/frontend/out,WEB_LOG_LEVEL=info" \
+            --labels "commit=${{ github.sha }},managed-by=github-actions" \
+            --iap \
+            --no-allow-unauthenticated \
+            --quiet
+
+      - name: Report the revision
+        run: |
+          echo "Deployed $SERVICE (${{ steps.build.outputs.digest }})" >> "$GITHUB_STEP_SUMMARY"
+          gcloud run services describe "$SERVICE" --region "$REGION" --format 'value(status.url)' >> "$GITHUB_STEP_SUMMARY"

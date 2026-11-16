@@ -1,0 +1,21 @@
+# Build context is the repo root; keep it small and keep secrets out.
+.git
+.github
+myenv
+**/node_modules
+**/.next
+frontend/out
+frontend/tsconfig.tsbuildinfo
+backend/tmp
+backend/static
+backend/.env
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/*.log
+.pytest_cache
+docs
+site
+test-corpus
+brand-src
+*.md

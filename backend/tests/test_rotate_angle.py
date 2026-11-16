@@ -13,7 +13,7 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from app.tasks.common import ensure_tmp_dir
-from app.tasks.pdf_tasks import rotate_pdf_task
+from app.tasks.pdf import rotate_pdf_task
 
 
 def _expected_box(w: float, h: float, theta: float) -> tuple[float, float]:

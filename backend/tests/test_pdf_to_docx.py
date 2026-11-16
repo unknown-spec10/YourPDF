@@ -114,7 +114,7 @@ def _post(client, pdf_bytes: bytes, name: str = "doc.pdf"):
 def test_docx_has_text_counts_table_content(tmp_path):
     from docx import Document
 
-    from app.tasks.pdf_tasks import _docx_has_text
+    from app.tasks.pdf import _docx_has_text
 
     table_doc = Document()
     table = table_doc.add_table(rows=1, cols=1)
@@ -131,12 +131,12 @@ def test_docx_has_text_counts_table_content(tmp_path):
 
 
 def test_missing_ocr_tool_returns_friendly_500(client, monkeypatch):
-    from app.tasks import pdf_tasks
+    from app.tasks.pdf import ocr as ocr_tasks
 
     def _raise_missing(*args, **kwargs):
         raise FileNotFoundError(2, "The system cannot find the file specified")
 
-    monkeypatch.setattr(pdf_tasks, "_run_ocrmypdf", _raise_missing)
+    monkeypatch.setattr(ocr_tasks, "_run_ocrmypdf", _raise_missing)
 
     response = _post(client, _make_scan_pdf(), name="scan.pdf")
 
@@ -159,7 +159,7 @@ def test_digital_pdf_uses_text_layer(client):
 
 @requires_ocr
 def test_existing_ocr_layer_is_reused(client, tmp_path):
-    from app.tasks.pdf_tasks import _run_ocrmypdf
+    from app.tasks.pdf import _run_ocrmypdf
 
     scan_path = tmp_path / "scan.pdf"
     ocr_path = tmp_path / "scan_ocr.pdf"
@@ -195,7 +195,7 @@ def test_blank_scan_returns_422(client):
 
 
 def test_pdf_text_layout_classifies_digital_scan_and_mixed(tmp_path):
-    from app.tasks.pdf_tasks import _pdf_text_layout
+    from app.tasks.pdf import _pdf_text_layout
 
     digital = tmp_path / "digital.pdf"
     digital.write_bytes(_make_digital_pdf())
@@ -211,7 +211,7 @@ def test_pdf_text_layout_classifies_digital_scan_and_mixed(tmp_path):
 
 @requires_ocr
 def test_pdf_text_layout_detects_existing_ocr_layer(tmp_path):
-    from app.tasks.pdf_tasks import _pdf_text_layout, _run_ocrmypdf
+    from app.tasks.pdf import _pdf_text_layout, _run_ocrmypdf
 
     scan_path = tmp_path / "scan.pdf"
     scan_path.write_bytes(_make_scan_pdf())

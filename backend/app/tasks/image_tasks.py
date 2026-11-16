@@ -7,7 +7,7 @@ import os
 import sys
 import uuid
 
-from fastapi import HTTPException
+from app.errors import DomainError, InvalidRequest
 from PIL import Image, ImageDraw, ImageFont
 
 from app.tasks.common import cleanup_paths, read_bytes, resolve_path
@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 def _download_name(original_filename: str | None, fallback: str, build) -> str:
-    if original_filename:
-        base, ext_orig = os.path.splitext(original_filename)
-        return build(base, ext_orig)
-    return fallback
+    """Kept as a thin alias so call sites stay unchanged; implementation is shared."""
+    from app.tasks.common import download_name
+
+    return download_name(original_filename, fallback, build)
 
 
 def compress_image_task(file_path: str, quality: int, original_filename: str = None) -> tuple[bytes, str]:
@@ -239,10 +239,10 @@ def convert_image_task(
                 import resvg_py
 
                 png_bytes = resvg_py.svg_to_bytes(svg_string=svg_text, width=render_width or None)
-            except HTTPException:
+            except DomainError:
                 raise
             except Exception:
-                raise HTTPException(status_code=400, detail="SVG could not be rendered. Check that the file is a valid SVG.")
+                raise InvalidRequest(status_code=400, detail="SVG could not be rendered. Check that the file is a valid SVG.")
             with Image.open(io.BytesIO(png_bytes)) as img:
                 if pillow_format == "jpeg" and img.mode in ("RGBA", "LA"):
                     img = img.convert("RGB")

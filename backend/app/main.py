@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -7,6 +8,10 @@ import hmac
 
 from app.routers import health_router, image_router, office_router, pdf_router, system_router
 from app.config import settings
+from app.errors import DomainError
+from app.middleware import RequestContextMiddleware
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="YourPDF API",
@@ -14,9 +19,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for local Next.js frontend calls
+# Enable CORS for a split deployment (static export on another origin).
 # Use explicit origins from settings instead of "*" because wildcard origins
 # combined with credentials expose the API to any site and browsers reject it.
+# In the shipped single-origin shape this middleware does nothing.
 _cors_origins = settings.cors_origins_list
 app.add_middleware(
     CORSMiddleware,
@@ -24,12 +30,13 @@ app.add_middleware(
     allow_credentials=bool(_cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
-    # The desktop shell can run the UI on its own origin (Tauri serves it from
-    # http://tauri.localhost) while the API answers on a loopback port. Cross-origin
-    # JS cannot read these unless they are explicitly exposed, and without them the
-    # client cannot name the downloaded file or show the job notice.
-    expose_headers=["Content-Disposition", "X-Job-Notice", "X-OCR-Applied"],
+    # Cross-origin JS cannot read these unless they are explicitly exposed, and without
+    # them the client cannot name the downloaded file or show the job notice.
+    expose_headers=["Content-Disposition", "X-Job-Notice", "X-OCR-Applied", "X-Request-ID"],
 )
+
+# One id per request, echoed as X-Request-ID and included in every access log line.
+app.add_middleware(RequestContextMiddleware)
 
 # Mount local static outputs directory for file download fallback.
 # In the desktop build `backend_root` is inside the install tree — never write there.
@@ -58,6 +65,36 @@ app.include_router(pdf_router, prefix="/api/v1")
 app.include_router(image_router, prefix="/api/v1")
 app.include_router(office_router, prefix="/api/v1")
 app.include_router(system_router, prefix="/api/v1")
+
+
+@app.exception_handler(DomainError)
+async def domain_error_handler(request, exc: DomainError):
+    """One mapping from a domain refusal to a response.
+
+    Registered at the app level because these are raised inside tasks — after the page count is
+    knowable, after a DOCX is paginated — so a limit hit three layers down must still answer
+    413/400 instead of falling into a router's generic 500.
+    """
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.detail or str(exc)})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc: Exception):
+    """Last resort: log the real error, tell the client nothing that leaks internals.
+
+    Routers used to catch ``Exception`` and return ``str(e)`` — twenty-five copies of that, and
+    it exposed temp paths and native-tool banners to users. The id in the body is the link back
+    to the traceback in the logs.
+    """
+    request_id = getattr(request.state, "request_id", "-")
+    logger.exception("unhandled error rid=%s path=%s", request_id, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "The request could not be completed. Please try again.",
+            "request_id": request_id,
+        },
+    )
 
 
 # Optional shared API key auth. Rule: when API_KEY is set (non-empty), every

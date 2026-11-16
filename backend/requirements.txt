@@ -1,12 +1,18 @@
 fastapi>=0.111.0
 uvicorn>=0.30.0
 pydantic-settings>=2.3.0
-pypdf>=4.2.0
+# Pinned below 7 on purpose: 7 removed PageObject.replace_contents(), which sign, watermark and
+# add-page-numbers still use. The lock pins an exact version; this floor keeps a plain
+# `pip install -r requirements.txt` from silently resolving 7.x.
+pypdf>=4.2.0,<7
 python-multipart>=0.0.9  # required by FastAPI for UploadFile/Form parsing
 Pillow>=10.3.0
 pdf2image>=1.17.0
 img2pdf>=0.5.1
 pdf2docx>=0.5.8
+# OCR driver. Not in the Windows-era lock because the desktop build ran the bundled CLI; the
+# container installs this and shells out to the console script it provides.
+ocrmypdf>=17.0,<18
 
 
 # Testing

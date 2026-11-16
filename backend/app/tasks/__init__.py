@@ -19,7 +19,7 @@ from app.tasks.office_tasks import (
     pptx_to_images_task,
     pptx_to_pdf_task,
 )
-from app.tasks.pdf_tasks import (
+from app.tasks.pdf import (
     add_page_numbers_task,
     compress_pdf_task,
     create_page_number_pdf,

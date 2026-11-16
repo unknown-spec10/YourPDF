@@ -1,20 +1,16 @@
-"""Shared upload persistence helpers (extracted from app.main)."""
+"""Persist uploads to the tmp dir and return backend-relative paths."""
+
 import os
 import shutil
 import uuid
 
 from fastapi import HTTPException, UploadFile
 
-
-def get_backend_root() -> str:
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.dirname(app_dir)
+from app.storage import ensure_tmp_dir
 
 
 def get_tmp_dir() -> str:
-    tmp_dir = os.environ.get("YOURPDF_TMP") or os.path.join(get_backend_root(), "tmp")
-    os.makedirs(tmp_dir, exist_ok=True)
-    return tmp_dir
+    return ensure_tmp_dir()
 
 
 def save_upload_file(file: UploadFile, extension: str, prefix: str = "upload") -> str:
@@ -39,9 +35,8 @@ def save_multi_upload(
     preserve_extension: bool = False,
     error_prefix: str = "Failed to save upload files",
 ) -> list[str]:
-    """Persist multiple uploads; on failure remove partial files and raise 500."""
+    """Persist multiple uploads; on failure remove the partial files and raise 500."""
     tmp_dir = get_tmp_dir()
-    backend_root = get_backend_root()
     saved_paths: list[str] = []
     try:
         for file in files:
@@ -52,10 +47,15 @@ def save_multi_upload(
                 shutil.copyfileobj(file.file, f)
             saved_paths.append(os.path.join("tmp", filename))
     except Exception as e:
-        for p in saved_paths:
-            abs_p = os.path.join(backend_root, p)
-            if os.path.exists(abs_p):
-                os.remove(abs_p)
+        # Roll back against the *tmp root*, not the backend root: with YOURPDF_TMP set the two
+        # differ, and the old code left the partial uploads behind.
+        for saved in saved_paths:
+            abs_path = os.path.join(tmp_dir, os.path.basename(saved))
+            if os.path.exists(abs_path):
+                try:
+                    os.remove(abs_path)
+                except OSError:
+                    pass
         raise HTTPException(status_code=500, detail=f"{error_prefix}: {str(e)}")
     return saved_paths
 

@@ -24,6 +24,9 @@ def unlock_pdf_bytes(data: bytes, password: str) -> bytes:
     if not password:
         raise ValueError("Password is required.")
     reader = PdfReader(io.BytesIO(data))
+    # Returning the file unchanged made "unlock" look successful on a PDF that was never locked.
+    if not reader.is_encrypted:
+        raise ValueError("This PDF is not password-protected.")
     if reader.is_encrypted:
         try:
             result = reader.decrypt(password)

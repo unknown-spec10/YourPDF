@@ -68,7 +68,9 @@ def test_file_size_exceeded(client):
     large_data = b"0" * (31 * 1024 * 1024)
     files = {"file": ("large.pdf", large_data, "application/pdf")}
     response = client.post("/api/compress", files=files, data={"quality": "low"})
-    assert response.status_code == 400
+    # 413 now that every size failure goes through the shared limit (it used to be a 400 from
+    # the per-endpoint check). The UI renders `detail` either way.
+    assert response.status_code == 413
     assert "exceeds the maximum limit" in response.json()["detail"]
     assert "30MB" in response.json()["detail"]
 

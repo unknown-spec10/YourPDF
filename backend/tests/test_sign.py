@@ -162,7 +162,7 @@ def test_pdf_to_images_single_page_subset(client):
     response = client.post(
         "/api/pdf-to-images",
         files=files,
-        data={"format": "png", "dpi": "50", "pages": "2"},
+        data={"format": "png", "dpi": "100", "pages": "2"},
     )
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
@@ -174,7 +174,7 @@ def test_pdf_to_images_two_page_subset_zip(client):
     response = client.post(
         "/api/pdf-to-images",
         files=files,
-        data={"format": "png", "dpi": "50", "pages": "1-2"},
+        data={"format": "png", "dpi": "100", "pages": "1-2"},
     )
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/zip"

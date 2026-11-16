@@ -14,20 +14,18 @@ from app.tasks.common import (
     SUBPROCESS_TIMEOUT,
     SUBPROCESS_TIMEOUT_MESSAGE,
     cleanup_paths,
+    count_pdf_pages,
+    download_name as _download_name,
     ensure_tmp_dir,
     read_bytes,
     resolve_path,
     resolve_paths,
+    run_tool,
 )
+from app.errors import DomainError
+from app.limits import validate_render_budget
 
 logger = logging.getLogger(__name__)
-
-
-def _download_name(original_filename: str | None, fallback: str, build) -> str:
-    if original_filename:
-        base, ext = os.path.splitext(original_filename)
-        return build(base, ext)
-    return fallback
 
 
 def _convert_docx_or_pptx_to_pdf(file_path: str, output_dir: str) -> str:
@@ -58,7 +56,7 @@ def _convert_docx_or_pptx_to_pdf(file_path: str, output_dir: str) -> str:
     cmd = [soffice_cmd, "--headless", "--convert-to", "pdf", "--outdir", output_dir, file_path]
     logger.info(f"Running LibreOffice conversion command: {' '.join(cmd)}")
     try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=SUBPROCESS_TIMEOUT)
+        run_tool(cmd, timeout=SUBPROCESS_TIMEOUT)
     except subprocess.TimeoutExpired:
         logger.error("LibreOffice conversion timed out after %s seconds", SUBPROCESS_TIMEOUT)
         raise Exception(SUBPROCESS_TIMEOUT_MESSAGE)
@@ -106,6 +104,8 @@ def merge_docx_task(file_paths: list[str], original_filename: str = None) -> tup
             original_filename, output_filename, lambda base, ext: f"{base}_merged{ext}"
         )
         return data, download_name
+    except DomainError:
+        raise
     except Exception as e:
         logger.error(f"DOCX merge task failed: {e}")
         raise e
@@ -123,11 +123,39 @@ def merge_docx_task(file_paths: list[str], original_filename: str = None) -> tup
                 pass
 
 
+def _render_selected_pages(pdf_path: str, dpi: int, pages: str | None, unit: str):
+    """Rasterise the requested pages of an already-converted document.
+
+    The selection is applied to the *converted* PDF because a DOCX/PPTX has no page count until
+    LibreOffice lays it out — which is also why the render budget can only be checked here. When
+    a range is given, only those pages are rendered at all, so a 400-page deck with a 10-page
+    selection costs 10 pages of memory instead of being refused outright.
+    """
+    from app.tasks.pdf.pages_spec import _parse_watermark_pages
+
+    total = count_pdf_pages(pdf_path)
+    spec = (pages or "all").strip()
+    if not spec or spec.lower() == "all":
+        validate_render_budget(total, unit)
+        images = convert_from_path(pdf_path, dpi=dpi)
+        return images, list(range(1, len(images) + 1))
+
+    target = _parse_watermark_pages(spec, total)
+    validate_render_budget(len(target), unit)
+    images = []
+    numbers: list[int] = []
+    for index in target:
+        part = convert_from_path(pdf_path, dpi=dpi, first_page=index + 1, last_page=index + 1)
+        images.extend(part)
+        numbers.extend([index + 1] * len(part))
+    return images, numbers
+
+
 def docx_to_images_task(
-    file_path: str, img_format: str, dpi: int, original_filename: str = None
+    file_path: str, img_format: str, dpi: int, original_filename: str = None, pages: str = "all"
 ) -> tuple[bytes, str]:
     """Convert DOCX to PDF first, rasterize pages, return single image or ZIP bytes."""
-    logger.info(f"Starting DOCX to image task. Format: {img_format}, DPI: {dpi}")
+    logger.info(f"Starting DOCX to image task. Format: {img_format}, DPI: {dpi}, Pages: {pages}")
 
     file_path = resolve_path(file_path)
     if not os.path.exists(file_path):
@@ -141,8 +169,7 @@ def docx_to_images_task(
 
     try:
         pdf_path = _convert_docx_or_pptx_to_pdf(file_path, tmp_dir)
-
-        images = convert_from_path(pdf_path, dpi=dpi)
+        images, page_numbers = _render_selected_pages(pdf_path, dpi, pages, "pages")
 
         if len(images) == 1:
             output_filename = f"image_{uuid.uuid4()}.{img_format.lower()}"
@@ -158,9 +185,10 @@ def docx_to_images_task(
             output_filename = f"images_{uuid.uuid4()}.zip"
             output_path = os.path.join(tmp_dir, output_filename)
             with zipfile.ZipFile(output_path, "w") as zipf:
-                for idx, img in enumerate(images):
-                    img_name = f"page_{idx + 1}.{img_format.lower()}"
-                    temp_img_path = os.path.join(tmp_dir, img_name)
+                for index, img in enumerate(images):
+                    page_no = page_numbers[index] if index < len(page_numbers) else index + 1
+                    img_name = f"page_{page_no}.{img_format.lower()}"
+                    temp_img_path = os.path.join(tmp_dir, f"tmpimg_{uuid.uuid4()}_{index}.{img_format.lower()}")
                     img.save(temp_img_path, format=img_format.upper())
                     zipf.write(temp_img_path, img_name)
                     os.remove(temp_img_path)
@@ -171,6 +199,8 @@ def docx_to_images_task(
 
         data = read_bytes(output_path)
         return data, download_name
+    except DomainError:
+        raise
     except Exception as e:
         logger.error(f"DOCX to Image conversion failed: {e}")
         raise e
@@ -200,6 +230,8 @@ def pptx_to_pdf_task(file_path: str, original_filename: str = None) -> tuple[byt
             original_filename, output_filename, lambda base, ext: f"{base}.pdf"
         )
         return data, download_name
+    except DomainError:
+        raise
     except Exception as e:
         logger.error(f"PPTX to PDF conversion failed: {e}")
         raise e
@@ -208,10 +240,10 @@ def pptx_to_pdf_task(file_path: str, original_filename: str = None) -> tuple[byt
 
 
 def pptx_to_images_task(
-    file_path: str, img_format: str, dpi: int, original_filename: str = None
+    file_path: str, img_format: str, dpi: int, original_filename: str = None, pages: str = "all"
 ) -> tuple[bytes, str]:
     """Convert PPTX to PDF first, rasterize slides, return single image or ZIP bytes."""
-    logger.info(f"Starting PPTX to images task for {file_path}")
+    logger.info(f"Starting PPTX to images task for {file_path}. Pages: {pages}")
 
     file_path = resolve_path(file_path)
     if not os.path.exists(file_path):
@@ -225,8 +257,7 @@ def pptx_to_images_task(
 
     try:
         pdf_path = _convert_docx_or_pptx_to_pdf(file_path, tmp_dir)
-
-        images = convert_from_path(pdf_path, dpi=dpi)
+        images, slide_numbers = _render_selected_pages(pdf_path, dpi, pages, "slides")
 
         if len(images) == 1:
             output_filename = f"slide_{uuid.uuid4()}.{img_format.lower()}"
@@ -242,9 +273,10 @@ def pptx_to_images_task(
             output_filename = f"slides_{uuid.uuid4()}.zip"
             output_path = os.path.join(tmp_dir, output_filename)
             with zipfile.ZipFile(output_path, "w") as zipf:
-                for idx, img in enumerate(images):
-                    img_name = f"slide_{idx + 1}.{img_format.lower()}"
-                    temp_img_path = os.path.join(tmp_dir, img_name)
+                for index, img in enumerate(images):
+                    slide_no = slide_numbers[index] if index < len(slide_numbers) else index + 1
+                    img_name = f"slide_{slide_no}.{img_format.lower()}"
+                    temp_img_path = os.path.join(tmp_dir, f"tmpimg_{uuid.uuid4()}_{index}.{img_format.lower()}")
                     img.save(temp_img_path, format=img_format.upper())
                     zipf.write(temp_img_path, img_name)
                     os.remove(temp_img_path)
@@ -255,6 +287,8 @@ def pptx_to_images_task(
 
         data = read_bytes(output_path)
         return data, download_name
+    except DomainError:
+        raise
     except Exception as e:
         logger.error(f"PPTX to images conversion failed: {e}")
         raise e
@@ -301,6 +335,8 @@ def merge_pptx_task(file_paths: list[str], original_filename: str = None) -> tup
             original_filename, output_filename, lambda base, ext: f"{base}_merged{ext}"
         )
         return data, download_name
+    except DomainError:
+        raise
     except Exception as e:
         logger.error(f"PPTX merge task failed: {e}")
         raise e

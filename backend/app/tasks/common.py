@@ -10,6 +10,8 @@ Centralizes the boilerplate shared across every processing module:
 
 import logging
 import os
+import signal
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +28,10 @@ BACKEND_ROOT = os.path.dirname(
 
 
 def tmp_root() -> str:
-    """Where uploads/outputs live. The desktop shell sets YOURPDF_TMP to a writable
-    per-user directory; a frozen install directory should not be used as a scratch pad."""
-    return os.environ.get("YOURPDF_TMP") or os.path.join(BACKEND_ROOT, "tmp")
+    """Where uploads/outputs live. Delegates to :mod:`app.storage`, the single definition."""
+    from app.storage import tmp_root as _tmp_root
+
+    return _tmp_root()
 
 
 def resolve_path(path_str: str) -> str:
@@ -79,3 +82,80 @@ def write_text(path: str, text: str) -> None:
     """Write UTF-8 text to ``path``."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
+
+
+def count_pdf_pages(path: str) -> int:
+    """Page count of a PDF on disk, used to enforce the render budget.
+
+    Imported lazily: this module is shared by every task, and pypdf is only needed by the
+    rasterisers.
+    """
+    from pypdf import PdfReader
+
+    return len(PdfReader(path).pages)
+
+
+def _kill_tree(pid: int, posix: bool) -> None:
+    """Kill a process and everything it spawned. Never raises: it runs on the failure path."""
+    try:
+        if posix:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        else:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+
+def run_tool(cmd: list[str], *, timeout: int, check: bool = True) -> subprocess.CompletedProcess:
+    """Run an external tool so that a timeout kills its whole tree, not just the launcher.
+
+    ``subprocess.run(timeout=...)`` kills the direct child only. Ghostscript, LibreOffice and
+    Tesseract all spawn grandchildren, and at concurrency 1 a single orphan keeps the instance's
+    only vCPU busy for the rest of its life. Starting the tool in its own session (POSIX) or
+    process group (Windows) makes the group killable.
+    """
+    posix = os.name != "nt"
+    kwargs: dict[str, object] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if posix:
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    process = subprocess.Popen(cmd, **kwargs)
+    try:
+        out, err = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(process.pid, posix)
+        try:
+            process.communicate(timeout=10)  # reap so the zombie does not linger
+        except subprocess.TimeoutExpired:
+            process.kill()
+        raise
+
+    completed = subprocess.CompletedProcess(cmd, process.returncode, out, err)
+    if check and process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, cmd, out, err)
+    return completed
+
+
+def download_name(original_filename: str | None, fallback: str, build) -> str:
+    """Name the output after the input, via ``build(base, ext)``.
+
+    One implementation for every task: this existed three times with a stray rename
+    (``ext`` vs ``ext_orig``) in the image copy.
+    """
+    if original_filename:
+        base, ext = os.path.splitext(original_filename)
+        return build(base, ext)
+    return fallback

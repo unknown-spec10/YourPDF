@@ -9,7 +9,7 @@ import os
 import uuid
 
 from app.tasks.common import ensure_tmp_dir
-from app.tasks.pdf_tasks import extract_text_task
+from app.tasks.pdf import extract_text_task
 
 
 def _make_layout_pdf_bytes() -> bytes:

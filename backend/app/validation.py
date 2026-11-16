@@ -1,20 +1,39 @@
-"""Shared upload validation helpers (extracted from app.main)."""
+"""Upload validation: allowed types, plus the per-tool shape checks.
+
+Size caps and the render budget live in :mod:`app.limits`, because they are also enforced from
+inside tasks where importing FastAPI would be wrong. Extension allowlists stay here: they are
+per-endpoint validation, called only from routers.
+"""
+
 import os
 
 from fastapi import HTTPException, UploadFile
 
-MAX_FILE_SIZE_MB = 30
+from app.errors import InvalidRequest
+from app.limits import UploadTooLarge, validate_file_size
+
+__all__ = [
+    "validate_extension",
+    "validate_image_file",
+    "validate_file_size",
+    "validate_dpi",
+    "UploadTooLarge",
+]
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 
+# Rasterising cost grows with the square of DPI: one A4 page at 2400 DPI is ~1 GB of pixels,
+# which is a one-request OOM. The UI offers 100-300, so anything outside that is not a user.
+MIN_DPI = 72
+MAX_DPI = 300
 
-def validate_file_size(file: UploadFile, max_size_mb: int = 30) -> None:
-    max_size_bytes = max_size_mb * 1024 * 1024
-    file.file.seek(0, os.SEEK_END)
-    size = file.file.tell()
-    file.file.seek(0)
-    if size > max_size_bytes:
-        raise HTTPException(status_code=400, detail=f"File size exceeds the maximum limit of {max_size_mb}MB.")
+
+def validate_dpi(dpi: int) -> int:
+    """Clamp-validate the render resolution. Rejects rather than silently clamping, so a caller
+    that asks for 1200 learns the limit instead of getting a different file than it requested."""
+    if not (MIN_DPI <= dpi <= MAX_DPI):
+        raise InvalidRequest(f"Resolution must be between {MIN_DPI} and {MAX_DPI} DPI.")
+    return dpi
 
 
 def validate_extension(filename: str, allowed_extensions, detail: str) -> str:
@@ -30,8 +49,8 @@ def validate_extension(filename: str, allowed_extensions, detail: str) -> str:
 
 
 def validate_image_file(file: UploadFile) -> None:
-    # Validate file size
-    validate_file_size(file, 30)
+    # Size is enforced by the shared limit; the type check is what makes it an image upload.
+    validate_file_size(file)
 
     ext = os.path.splitext(file.filename.lower())[1]
     if ext not in [".jpg", ".jpeg", ".png", ".webp"]:

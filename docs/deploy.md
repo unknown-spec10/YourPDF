@@ -31,20 +31,21 @@ One image serves both halves of the app: the Next.js static export at `/` and th
 From the repo root, with `gcloud` authenticated against the project:
 
 ```bash
-# 1. build a plain linux/amd64 image and push it
+# 1. build a plain linux/amd64 image and push it — ONE mutable tag, overwritten
 docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-  -f web/Dockerfile -t "<dockerhub-user>/yourpdf-web:<tag>" --load .
-docker push "<dockerhub-user>/yourpdf-web:<tag>"
+  -f web/Dockerfile -t "yourpdf-web:local" --load .
+docker tag yourpdf-web:local "<dockerhub-user>/yourpdf-web:latest"
+docker push "<dockerhub-user>/yourpdf-web:latest"
 
 # 2. prove the image before it can reach users
-docker run -d --name smoke -p 8090:8080 "<dockerhub-user>/yourpdf-web:<tag>"
+docker run -d --name smoke -p 8090:8080 yourpdf-web:local
 until curl -fsS http://127.0.0.1:8090/health >/dev/null; do sleep 1; done
 docker exec smoke python -m web.tests.smoke_endpoints --base http://127.0.0.1:8080 --fail-on-skip
 docker rm -f smoke
 
 # 3. deploy
 gcloud run deploy yourpdf-web \
-  --image "docker.io/<dockerhub-user>/yourpdf-web:<tag>" \
+  --image "docker.io/<dockerhub-user>/yourpdf-web:latest" \
   --project gen-lang-client-0977081292 --region asia-south1 --platform managed \
   --port 8080 --cpu 2 --memory 4Gi --concurrency 1 --timeout 900 \
   --min-instances 0 --max-instances 2 --cpu-boost --execution-environment gen2 \
@@ -81,15 +82,17 @@ gcloud run services update-traffic yourpdf-web --region asia-south1 --remove-tag
 `.github/workflows/deploy-web.yml`, two jobs:
 
 **build-and-push** — logs into Docker Hub (`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets), runs
-`docker buildx build --platform linux/amd64 --provenance=false --sbom=false` and pushes `:<sha>` and
-`:latest`. `--provenance=false --sbom=false` are load-bearing: a default buildx push produces an OCI
-index with an attestation entry, and Cloud Run's `mirror.gcr.io` rejects that layout with a
-misleading `Image '...' not found`. Then it pulls the tag back, runs the 36-case smoke suite inside
+`docker buildx build --platform linux/amd64 --provenance=false --sbom=false` and pushes a **single
+mutable tag, `:latest`**, overwriting the previous build. There are no per-commit or date-stamped
+tags: the registry holds exactly one tag per repo, and the exact bytes of every deploy live in the
+Cloud Run revision, not in a pile of tags. `--provenance=false --sbom=false` are load-bearing: a
+default buildx push produces an OCI index with an attestation entry, and Cloud Run's `mirror.gcr.io`
+rejects that layout with a misleading `Image '...' not found`. Then it pulls the tag back, runs the 36-case smoke suite inside
 the container with `--fail-on-skip` (a missing LibreOffice Impress or tessdata pack must fail here,
 not on a user's `.pptx`), and asserts the static export is in the image.
 
-**deploy** — skipped while `vars.GCP_PROJECT_ID` is empty. Otherwise: WIF auth, resolve the pushed
-tag to a digest with `docker buildx imagetools inspect`, deploy `repo@sha256:...`, add the `allUsers`
+**deploy** — skipped while `vars.GCP_PROJECT_ID` is empty. Otherwise: WIF auth, resolve `:latest` to
+a digest with `docker buildx imagetools inspect`, deploy `repo@sha256:...`, add the `allUsers`
 invoker binding, poll `/health` to 200, write URL + digest to the run summary.
 
 The deploy retries up to 4 times, 90 s apart, re-resolving the digest on each attempt. That loop

@@ -6,6 +6,11 @@ name: Deploy Web
 # the live service was deployed from, and Cloud Run pulls it via its mirror.gcr.io mirror.
 # Auth uses the repo secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN.
 #
+# One mutable tag only: every build overwrites `:latest`; no per-commit, dated or version
+# tags are ever pushed, so the registry holds exactly one tag. Rollback is done by shifting
+# Cloud Run traffic to a previous revision — each revision pins the digest it was deployed
+# with, so the digest lives in the revisions rather than in a pile of registry tags.
+#
 # The deploy job is SKIPPED when GCP credentials are not configured (`vars.GCP_PROJECT_ID`
 # empty). The repo currently has NO GCP variables set, so a push to main builds and smokes
 # the image but does not produce a red build. Set the variables below to enable deploys.
@@ -71,7 +76,6 @@ jobs:
             --sbom=false \
             --build-arg NEXT_PUBLIC_SITE_URL="${{ vars.PUBLIC_SITE_URL }}" \
             -f web/Dockerfile \
-            -t "$IMAGE_REPO:${GITHUB_SHA}" \
             -t "$IMAGE_REPO:latest" \
             --push .
 
@@ -80,8 +84,8 @@ jobs:
         # fail on a SKIP — a missing native tool (LibreOffice, tessdata, ocrmypdf) must fail
         # here, not on the first user's pptx. Pulling the tag also proves the push landed.
         run: |
-          docker pull "$IMAGE_REPO:${{ github.sha }}"
-          docker run -d --name smoke -p 8080:8080 "$IMAGE_REPO:${{ github.sha }}"
+          docker pull "$IMAGE_REPO:latest"
+          docker run -d --name smoke -p 8080:8080 "$IMAGE_REPO:latest"
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
             sleep 1
@@ -129,12 +133,13 @@ jobs:
         # Retry loop: Cloud Run's Docker Hub mirror (mirror.gcr.io) lags a fresh push and
         # answers "Image 'mirror.gcr.io/<user>/<repo>:<tag>' not found" for the first 1-3
         # attempts. Retry up to 4 times, ~90 s apart, instead of rebuilding. Each attempt
-        # re-resolves the per-commit tag to its digest inside this job, so the deploy is
-        # pinned to immutable bytes without relying on cross-job outputs (which came through
-        # empty once). A failed attempt costs nothing: the service already exists and traffic
-        # only moves to the new revision on success.
+        # re-resolves the single mutable `latest` tag to its digest inside this job, so the
+        # deploy is pinned to immutable bytes without relying on cross-job outputs (which came
+        # through empty once). A failed attempt costs nothing: the service already exists and
+        # traffic only moves to the new revision on success.
         run: |
-          IMAGE_TAG="$IMAGE_REPO:${GITHUB_SHA}"
+          IMAGE_TAG="$IMAGE_REPO:latest"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
           deployed=false
           for attempt in 1 2 3 4; do
             DIGEST=$(docker buildx imagetools inspect "$IMAGE_TAG" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
@@ -204,6 +209,6 @@ jobs:
           {
             echo "### Deployed $SERVICE"
             echo "- URL: $URL"
-            echo "- Image: $IMAGE_REPO:$GITHUB_SHA"
+            echo "- Image: $IMAGE_TAG"
             echo "- Digest: $IMAGE_REPO@$DEPLOY_DIGEST"
           } >> "$GITHUB_STEP_SUMMARY"

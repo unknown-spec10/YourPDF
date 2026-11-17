@@ -12,7 +12,7 @@ design assessment (32 MiB envelope, h2c, IAP, sizing rationale) — read it for 
 | Cloud Run service | `yourpdf-web` |
 | Runtime service account | `803645689505-compute@developer.gserviceaccount.com` (project default) |
 | CI deploy service account | `yourpdf-deploy@gen-lang-client-0977081292.iam.gserviceaccount.com` |
-| Image (CI) | `docker.io/unknowndockerishere/yourpdf-web:latest` |
+| Image (CI) | `docker.io/deepdocker2023/yourpdf-web:latest` |
 | Workflow | `.github/workflows/deploy-web.yml` |
 
 One image serves both halves of the app: the Next.js static export at `/` and the FastAPI backend at
@@ -182,12 +182,12 @@ one serving. Prefer rolling traffic back over deleting revisions.
 ## Traps
 
 - **Docker Hub mirror lag** — see above; retry, never rebuild.
-- **One Docker Hub account, one tag.** `DOCKERHUB_USERNAME` is `unknowndockerishere`, and CI publishes
-  only a mutable `:latest` that each build overwrites. There are deliberately no per-commit or
-  date-stamped tags: the exact bytes of a deploy live in the Cloud Run revision
-  (`spec.containers[0].image` shows `repo@sha256:...`), so rollback is a traffic shift, not a hunt
-  through tags. The account `deepdocker2023` — used once for a manual first deploy — was deleted on
-  2026-11-17; do not push there again.
+- **One Docker Hub account, one tag.** `DOCKERHUB_USERNAME` is `deepdocker2023`, and CI publishes only
+  a mutable `:latest` that each build overwrites. There are deliberately no per-commit or date-stamped
+  tags: the exact bytes of a deploy live in the Cloud Run revision (`spec.containers[0].image` shows
+  `repo@sha256:...`), so rollback is a traffic shift, not a hunt through tags. The account
+  `unknowndockerishere` was emptied and retired on 2026-11-17 (all 8 of its images deleted); do not
+  push there again.
 - **No IAP, and it cannot be added on this project.** IAP's OAuth client attaches to an
   Organization-level brand; `GET https://iap.googleapis.com/v1/projects/803645689505/brands` answers
   `Project must belong to an organization`, and the IAP OAuth Admin APIs were shut down in 2026. A

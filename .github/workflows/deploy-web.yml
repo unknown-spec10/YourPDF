@@ -25,9 +25,13 @@ name: Deploy Web
 #                                  NEXT_PUBLIC_SITE_URL build arg (og:image/twitter metadata)
 # Nothing is stored as a long-lived key: the deploy job federates via OIDC.
 #
-# No IAP: the project has no Google Cloud Organization, so IAP cannot be configured (it
-# fails with 502 "Empty Google Account OAuth client ID(s)/secret(s)"). The service is
-# public instead: an idempotent allUsers -> roles/run.invoker binding after each deploy.
+# The service is IAP-protected (direct Cloud Run IAP, no load balancer, no IAP charge): every
+# request must pass a Google sign-in, and only identities holding roles/iap.httpsResourceAccessor
+# get through. The IAP OAuth client is wired at the project level
+# (gcloud alpha iap settings set --resource-type=cloud-run), NOT by this workflow — the deploy
+# command deliberately passes no --iap flag, so the service-level setting persists across
+# revisions. This workflow must NEVER grant allUsers roles/run.invoker: that makes the gate
+# cosmetic. The verify step therefore asserts the 302 to accounts.google.com, not a 200.
 on:
   workflow_dispatch:
   push:
@@ -181,34 +185,38 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure public access
-        # No IAP (no Google Cloud Organization in this project), so the service is public.
-        # add-iam-policy-binding is idempotent. `gcloud run services update` has no
-        # --allow-unauthenticated flag — this binding is the supported way.
-        run: |
-          gcloud run services add-iam-policy-binding "$SERVICE" \
-            --project "$PROJECT" \
-            --region "$REGION" \
-            --member=allUsers \
-            --role=roles/run.invoker \
-            --quiet
-
-      - name: Verify the live service
+      - name: Verify the live service and the sign-in gate
+        # The service is IAP-protected, so an unauthenticated request never returns 200: it is
+        # answered with a 302 to accounts.google.com. That redirect IS the success condition here.
+        # Never grant allUsers roles/run.invoker — it would make the IAP gate cosmetic.
         run: |
           URL=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')
-          ok=false
-          for i in $(seq 1 24); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/health" || true)
-            if [ "$code" = "200" ]; then ok=true; break; fi
-            sleep 5
-          done
-          if [ "$ok" != "true" ]; then
-            echo "$URL/health never returned 200 within ~2 minutes" >&2
+          REV=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.latestReadyRevisionName)')
+          ready=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.conditions[0].status)')
+          if [ "$ready" != "True" ]; then
+            echo "Latest revision $REV is not Ready (status: $ready)" >&2
             exit 1
           fi
+
+          gate=""
+          for i in $(seq 1 24); do
+            loc=$(curl -sS -o /dev/null -D - -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0 Safari/537.36" \
+                    -H "Accept: text/html" "$URL/" 2>/dev/null | tr -d '\r' | awk 'BEGIN{IGNORECASE=1} /^location:/{print $2; exit}')
+            case "$loc" in
+              https://accounts.google.com/*) gate="$loc"; break ;;
+            esac
+            sleep 5
+          done
+          if [ -z "$gate" ]; then
+            echo "$URL did not redirect to accounts.google.com — the IAP gate is not enforcing" >&2
+            exit 1
+          fi
+
           {
             echo "### Deployed $SERVICE"
             echo "- URL: $URL"
+            echo "- Revision: $REV"
             echo "- Image: $IMAGE_TAG"
             echo "- Digest: $IMAGE_REPO@$DEPLOY_DIGEST"
+            echo "- IAP gate: ok (302 → accounts.google.com)"
           } >> "$GITHUB_STEP_SUMMARY"

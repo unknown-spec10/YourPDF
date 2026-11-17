@@ -233,6 +233,32 @@ user lands back where they were.
 That 403 is the proof. A successful sign-in from an account that *does* have the role proves the
 happy path; only the refusal proves the gate.
 
+### Giving someone access (one place)
+
+Grant the role — that is the whole procedure:
+
+```bash
+gcloud projects add-iam-policy-binding gen-lang-client-0977081292 \
+  --member=user:them@gmail.com --role=roles/iap.httpsResourceAccessor
+# revoke: same command with remove-iam-policy-binding
+```
+
+Or Console → IAM & Admin → IAM → Grant access → **IAP-secured Web App User**.
+
+This is the *only* place it has to be done because the OAuth consent screen is **published (In
+production)** as of 2026-11-18. While it was in Testing, every user also had to be added under
+Google Auth Platform → Audience → Test users, and those grants expired every 7 days; publishing
+removed that second list, the 7-day re-consent and the 100-test-user limit.
+
+To publish, the Branding page needed three things that are worth knowing before touching it:
+app name, **user support email**, and **developer contact email** — plus, because the user type is
+External, an **application home page** and **privacy policy link**, whose domains must appear in
+**Authorised domains** (subdomains of `run.app` are accepted). Missing any of them leaves "Publish
+app" greyed out with only "complete your configuration on the Branding page" as the hint.
+
+Apps published without verification still carry a **100-user grant cap** — irrelevant at this
+scale, but it means a public launch needs verification, not just a publish.
+
 ## Rollback
 
 ```bash

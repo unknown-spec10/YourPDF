@@ -12,8 +12,7 @@ design assessment (32 MiB envelope, h2c, IAP, sizing rationale) — read it for 
 | Cloud Run service | `yourpdf-web` |
 | Runtime service account | `803645689505-compute@developer.gserviceaccount.com` (project default) |
 | CI deploy service account | `yourpdf-deploy@gen-lang-client-0977081292.iam.gserviceaccount.com` |
-| Image (CI) | `docker.io/unknowndockerishere/yourpdf-web:<commit-sha>` |
-| Image (first manual deploy, 2026-11-17) | `docker.io/deepdocker2023/yourpdf-web:20261116-1915` |
+| Image (CI) | `docker.io/unknowndockerishere/yourpdf-web:latest` |
 | Workflow | `.github/workflows/deploy-web.yml` |
 
 One image serves both halves of the app: the Next.js static export at `/` and the FastAPI backend at
@@ -183,10 +182,12 @@ one serving. Prefer rolling traffic back over deleting revisions.
 ## Traps
 
 - **Docker Hub mirror lag** — see above; retry, never rebuild.
-- **Two Docker Hub accounts hold this app.** The repo secret `DOCKERHUB_USERNAME` is
-  `unknowndockerishere` (what CI uses); the first manual deploy pushed to `deepdocker2023`. Both
-  repos are public and functional, so a running revision can come from either — check
-  `spec.containers[0].image` on the revision before assuming which build is live.
+- **One Docker Hub account, one tag.** `DOCKERHUB_USERNAME` is `unknowndockerishere`, and CI publishes
+  only a mutable `:latest` that each build overwrites. There are deliberately no per-commit or
+  date-stamped tags: the exact bytes of a deploy live in the Cloud Run revision
+  (`spec.containers[0].image` shows `repo@sha256:...`), so rollback is a traffic shift, not a hunt
+  through tags. The account `deepdocker2023` — used once for a manual first deploy — was deleted on
+  2026-11-17; do not push there again.
 - **No IAP, and it cannot be added on this project.** IAP's OAuth client attaches to an
   Organization-level brand; `GET https://iap.googleapis.com/v1/projects/803645689505/brands` answers
   `Project must belong to an organization`, and the IAP OAuth Admin APIs were shut down in 2026. A

@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Sun, Moon, Menu, X, ShieldCheck } from 'lucide-react'
+import { Sun, Moon, Menu, X, ShieldCheck, ArrowLeftRight } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAppStore } from '@/lib/store'
+import { IAP_ENABLED, buildSwitchAccountHref } from '@/lib/iap'
 
 function GithubIcon({ className }: { className?: string }) {
   return (
@@ -31,6 +32,14 @@ export default function Navbar() {
   const [mounted, setMounted] = useState(false)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
+
+  /// Where the account chooser should return to. Built on the client because the static export
+  // cannot know the current query string at build time.
+  const [switchAccountHref, setSwitchAccountHref] = useState<string | null>(null)
+  useEffect(() => {
+    if (!IAP_ENABLED) return
+    setSwitchAccountHref(buildSwitchAccountHref(window.location.pathname, window.location.search))
+  }, [])
 
   // Theme-aware favicon. The OS-driven `media` attributes cannot follow an in-app toggle, so the
   // icon is swapped from the same state that drives the `dark` class. The tab icon then matches
@@ -147,6 +156,17 @@ export default function Navbar() {
             Zero retention
           </span>
 
+          {switchAccountHref && (
+            <a
+              href={switchAccountHref}
+              className="hidden h-9 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground lg:flex"
+              title="Opens Google's account chooser so you can sign in as a different Google account. Your Google session is not ended, so choosing the same account signs you back in."
+            >
+              <ArrowLeftRight className="h-[15px] w-[15px]" aria-hidden="true" />
+              <span>Switch account</span>
+            </a>
+          )}
+
           <a
             href="https://github.com/unknown-spec10/YourPDF"
             target="_blank"
@@ -224,6 +244,16 @@ export default function Navbar() {
               >
                 GitHub
               </a>
+              {switchAccountHref && (
+                <a
+                  href={switchAccountHref}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="mt-1 flex items-center gap-2 rounded-lg border-t border-border/70 px-3 pt-3 pb-2.5 text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-foreground lg:hidden"
+                >
+                  <ArrowLeftRight className="h-[15px] w-[15px]" aria-hidden="true" />
+                  Switch account
+                </a>
+              )}
             </nav>
           </motion.div>
         )}

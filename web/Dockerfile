@@ -24,6 +24,10 @@ ENV NEXT_PUBLIC_API_URL=""
 # than at runtime. Empty leaves Next's relative default (fine for local builds).
 ARG NEXT_PUBLIC_SITE_URL=""
 ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+# Tells the UI it is served behind Identity-Aware Proxy, which is the only place the
+# "switch account" link (IAP's cookie-clear parameter) does anything.
+ARG NEXT_PUBLIC_IAP_ENABLED=""
+ENV NEXT_PUBLIC_IAP_ENABLED=${NEXT_PUBLIC_IAP_ENABLED}
 # Fail the build, not the deploy, if the export is missing or incomplete. `frontend/out` is
 # git-ignored, so a container built without this step would serve an API with no UI.
 RUN npm run build && test -f out/index.html && test -d out/_next

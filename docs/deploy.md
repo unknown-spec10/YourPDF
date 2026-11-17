@@ -194,6 +194,45 @@ Limits to spot-check: two 16 MB files → the app's own JSON **413** with a frie
 files → Cloud Run's HTML 413 (the host rejects above 32 MiB before Python runs); `pages=1-999` on a
 small PDF → **400** from the render budget.
 
+## Switching accounts (IAP)
+
+There is **no app session**. IAP owns the session in an `HttpOnly` `GCP_IAP_UID` cookie scoped to
+the `*.run.app` host, so clearing React state, deleting a local token or posting to a "logout"
+endpoint would change nothing: the next request is authenticated again by the same cookie.
+
+IAP exposes one control, and the app uses it as a plain link in the header (and in the mobile
+menu):
+
+```
+/current-page?gcp-iap-mode=CLEAR_LOGIN_COOKIE
+```
+
+That request clears the cookie (`GCP_IAP_UID=none`, expired 1970) and bounces through
+`accounts.google.com/o/oauth2/v2/auth?...&prompt=select_account` -- Google's account chooser.
+Picking a different account signs in as that identity. The link carries the current page, so the
+user lands back where they were.
+
+- **It is built only where IAP exists.** `NEXT_PUBLIC_IAP_ENABLED=1` is passed as a build arg by
+  the deploy workflow; a local `web.serve` omits the link because the parameter does nothing
+  without IAP in front of it.
+- **It is "switch account", not "logout".** The Google session itself is untouched, so choosing
+  the same account signs straight back in. Naming it logout would promise a private browser that
+  this does not provide.
+- **No backend, no cookie handling, nothing to keep in sync.** One anchor; deleting the feature
+  is deleting that anchor.
+
+### Testing the gate
+
+`curl` only proves the gate exists: an unauthenticated request gets a `302` to
+`accounts.google.com`, which says nothing about *who* is allowed in. To prove it discriminates:
+
+1. Open the service in a **private window** (or click "Switch account") and sign in with a Google
+   account that does **not** hold `roles/iap.httpsResourceAccessor`.
+2. Expect Google's `403` -- "You don't have access to this resource."
+
+That 403 is the proof. A successful sign-in from an account that *does* have the role proves the
+happy path; only the refusal proves the gate.
+
 ## Rollback
 
 ```bash

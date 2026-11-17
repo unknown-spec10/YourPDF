@@ -79,6 +79,7 @@ jobs:
             --provenance=false \
             --sbom=false \
             --build-arg NEXT_PUBLIC_SITE_URL="${{ vars.PUBLIC_SITE_URL }}" \
+            --build-arg NEXT_PUBLIC_IAP_ENABLED="1" \
             -f web/Dockerfile \
             -t "$IMAGE_REPO:latest" \
             --push .

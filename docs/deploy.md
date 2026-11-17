@@ -25,6 +25,24 @@ One image serves both halves of the app: the Next.js static export at `/` and th
    itself, or run the workflow by hand (`gh workflow run "Deploy Web"`). It builds, smokes, deploys.
 2. **Manual (break-glass).** Below. Use it when CI is broken or you need a one-off flag change.
 
+### What a push does — and does not create
+
+| Change pushed to `main` | Result |
+|---|---|
+| `web/**`, `backend/**`, `frontend/**`, `.github/workflows/deploy-web.yml` | one image build, smoke gate, one deploy |
+| anything else (`docs/**`, `AGENTS.md`, `README.md`, `site/**` unless a path above matches) | nothing — no build, no revision |
+
+A deploy produces **one** image tag and **one** Cloud Run revision, never a new version per push:
+
+- The build pushes only `$IMAGE_REPO:latest` (no `:<sha>`, no date suffix). The tag is overwritten in
+  place, so the registry holds exactly one tag — verify with
+  `curl -s https://hub.docker.com/v2/repositories/deepdocker2023/yourpdf-web/tags | jq .count` → `1`.
+  The previous manifest becomes unreferenced and Docker Hub garbage-collects its layers on its own
+  schedule.
+- Cloud Run keeps a **revision object** per deploy (`00012-dt5`, `00013-…`). That is small platform
+  metadata pointing at a digest, not another image copy, and it is what makes rollback a traffic
+  shift. Old revisions can be pruned with `gcloud run revisions delete <name>`, but there is no need.
+
 ## Manual deploy
 
 From the repo root, with `gcloud` authenticated against the project:
@@ -142,7 +160,9 @@ Repository **variables** (Settings → Secrets and variables → Actions → Var
 | `GCP_DEPLOY_SERVICE_ACCOUNT` | `yourpdf-deploy@gen-lang-client-0977081292.iam.gserviceaccount.com` |
 | `PUBLIC_SITE_URL` | `https://yourpdf-web-vhkjwky42a-el.a.run.app` |
 
-Secrets already present: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
+Secrets already present: `DOCKERHUB_USERNAME` = `deepdocker2023`, `DOCKERHUB_TOKEN` = a Docker Hub PAT
+for that account (Read/Write/Delete). Rotate the token by writing a new secret — the image path is
+built from `DOCKERHUB_USERNAME`, so no workflow edit is needed when the account changes.
 
 ## Verifying a deploy
 

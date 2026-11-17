@@ -111,6 +111,7 @@ same base image if a dependency changes.
 ## More context
 
 - `docs/architecture.md` — the service as built.
-- `docs/web-cloud-run.md` — deployment sizing, the 32 MiB/h2c analysis, IAP and limits rationale.
+- `docs/deploy.md` — the runbook: live facts, manual + CI deploy, WIF setup, verification, rollback, traps.
+- `docs/web-cloud-run.md` — historical design assessment; superseded by `docs/deploy.md` for how to deploy.
 - `frontend/AGENTS.md` — this Next.js 16 differs from training data; consult
   `frontend/node_modules/next/dist/docs/` before writing Next code.

@@ -1,0 +1,203 @@
+# Deploying YourPDF to Cloud Run
+
+This is the runbook for the service that is live today. `docs/web-cloud-run.md` is the earlier
+design assessment (32 MiB envelope, h2c, IAP, sizing rationale) — read it for *why*, not for *how*.
+
+**Live:** <https://yourpdf-web-vhkjwky42a-el.a.run.app> — public, no sign-in wall, `max-instances 2`.
+
+| Fact | Value |
+|---|---|
+| GCP project | `gen-lang-client-0977081292` (number `803645689505`, no Organization) |
+| Region | `asia-south1` |
+| Cloud Run service | `yourpdf-web` |
+| Runtime service account | `803645689505-compute@developer.gserviceaccount.com` (project default) |
+| CI deploy service account | `yourpdf-deploy@gen-lang-client-0977081292.iam.gserviceaccount.com` |
+| Image (CI) | `docker.io/unknowndockerishere/yourpdf-web:<commit-sha>` |
+| Image (first manual deploy, 2026-11-17) | `docker.io/deepdocker2023/yourpdf-web:20261116-1915` |
+| Workflow | `.github/workflows/deploy-web.yml` |
+
+One image serves both halves of the app: the Next.js static export at `/` and the FastAPI backend at
+`/api` and `/api/v1`, from the same origin. There is no bucket, database or queue — uploads live in
+`/tmp` for the duration of one request and are deleted in a `finally` block.
+
+## Two ways to deploy
+
+1. **CI (normal path).** Push to `main` touching `web/**`, `backend/**`, `frontend/**` or the workflow
+   itself, or run the workflow by hand (`gh workflow run "Deploy Web"`). It builds, smokes, deploys.
+2. **Manual (break-glass).** Below. Use it when CI is broken or you need a one-off flag change.
+
+## Manual deploy
+
+From the repo root, with `gcloud` authenticated against the project:
+
+```bash
+# 1. build a plain linux/amd64 image and push it
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+  -f web/Dockerfile -t "<dockerhub-user>/yourpdf-web:<tag>" --load .
+docker push "<dockerhub-user>/yourpdf-web:<tag>"
+
+# 2. prove the image before it can reach users
+docker run -d --name smoke -p 8090:8080 "<dockerhub-user>/yourpdf-web:<tag>"
+until curl -fsS http://127.0.0.1:8090/health >/dev/null; do sleep 1; done
+docker exec smoke python -m web.tests.smoke_endpoints --base http://127.0.0.1:8080 --fail-on-skip
+docker rm -f smoke
+
+# 3. deploy
+gcloud run deploy yourpdf-web \
+  --image "docker.io/<dockerhub-user>/yourpdf-web:<tag>" \
+  --project gen-lang-client-0977081292 --region asia-south1 --platform managed \
+  --port 8080 --cpu 2 --memory 4Gi --concurrency 1 --timeout 900 \
+  --min-instances 0 --max-instances 2 --cpu-boost --execution-environment gen2 \
+  --set-env-vars "YOURPDF_TMP=/tmp,HOME=/tmp,TMPDIR=/tmp,MAX_FILE_SIZE_MB=30,MAX_TOTAL_UPLOAD_MB=30,MAX_RENDER_PAGES=100,YOURPDF_OUT=/app/frontend/out,WEB_LOG_LEVEL=info" \
+  --labels "commit=<sha>,managed-by=manual" --quiet
+
+# 4. public access (idempotent; there is no --allow-unauthenticated on `services update`)
+gcloud run services add-iam-policy-binding yourpdf-web \
+  --project gen-lang-client-0977081292 --region asia-south1 \
+  --member=allUsers --role=roles/run.invoker --quiet
+```
+
+Why each flag: `--concurrency 1` because every tool shells out to single-threaded CPU work
+(Ghostscript, Tesseract, ocrmypdf, LibreOffice) and the platform default of 80 would thrash one
+vCPU and OOM `soffice`; `--timeout 900` must exceed the app's own `SUBPROCESS_TIMEOUT` (600 s);
+`--memory 4Gi` because `/tmp` is in-memory and counts against the limit; `--cpu-boost` and
+`--execution-environment gen2` cut cold start.
+
+**Never put `PORT` in `--set-env-vars`.** Cloud Run reserves it and the deploy fails with
+`The following reserved env names were provided: PORT`.
+
+**`--no-traffic` is rejected when the service does not exist yet** (`--no-traffic not supported when
+creating a new service`). It is only usable on updates, e.g. to stage a canary:
+
+```bash
+gcloud run deploy yourpdf-web ... --no-traffic --tag canary      # staging only
+curl -fsS https://canary---yourpdf-web-vhkjwky42a-el.a.run.app/health
+gcloud run services update-traffic yourpdf-web --region asia-south1 --to-latest
+gcloud run services update-traffic yourpdf-web --region asia-south1 --remove-tags canary
+```
+
+## What CI does
+
+`.github/workflows/deploy-web.yml`, two jobs:
+
+**build-and-push** — logs into Docker Hub (`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets), runs
+`docker buildx build --platform linux/amd64 --provenance=false --sbom=false` and pushes `:<sha>` and
+`:latest`. `--provenance=false --sbom=false` are load-bearing: a default buildx push produces an OCI
+index with an attestation entry, and Cloud Run's `mirror.gcr.io` rejects that layout with a
+misleading `Image '...' not found`. Then it pulls the tag back, runs the 36-case smoke suite inside
+the container with `--fail-on-skip` (a missing LibreOffice Impress or tessdata pack must fail here,
+not on a user's `.pptx`), and asserts the static export is in the image.
+
+**deploy** — skipped while `vars.GCP_PROJECT_ID` is empty. Otherwise: WIF auth, resolve the pushed
+tag to a digest with `docker buildx imagetools inspect`, deploy `repo@sha256:...`, add the `allUsers`
+invoker binding, poll `/health` to 200, write URL + digest to the run summary.
+
+The deploy retries up to 4 times, 90 s apart, re-resolving the digest on each attempt. That loop
+exists because the Docker Hub mirror lags a fresh push: the first 1–3 attempts answer
+`Image 'mirror.gcr.io/<user>/<repo>:<tag>' not found` even though the tag is live on Docker Hub and
+`hub.docker.com/v2/.../tags/<tag>` returns it. The 2026-11-17 CI run failed attempts 1 and 2 and
+succeeded on attempt 3, with the identical digest each time — that is the signature of lag, not a bad
+push. **Do not rebuild to "fix" it.**
+
+## GitHub setup for CI (already done — recreate only if lost)
+
+```bash
+PROJECT=gen-lang-client-0977081292; PN=803645689505
+
+gcloud services enable sts.googleapis.com --project $PROJECT
+
+gcloud iam workload-identity-pools create github --location=global \
+  --display-name="GitHub Actions" --project $PROJECT
+
+gcloud iam workload-identity-pools providers create-oidc github \
+  --location=global --workload-identity-pool=github --display-name="GitHub OIDC" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
+  --attribute-condition="assertion.repository=='unknown-spec10/YourPDF' && assertion.ref=='refs/heads/main'" \
+  --project $PROJECT
+
+gcloud iam service-accounts create yourpdf-deploy --display-name="YourPDF CI deploy" --project $PROJECT
+SA=yourpdf-deploy@$PROJECT.iam.gserviceaccount.com
+
+# run.admin, not run.developer: the workflow also sets an IAM policy on the service
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="roles/run.admin"
+gcloud iam service-accounts add-iam-policy-binding \
+  803645689505-compute@developer.gserviceaccount.com \
+  --member="serviceAccount:$SA" --role="roles/iam.serviceAccountUser" --project $PROJECT
+gcloud iam service-accounts add-iam-policy-binding $SA \
+  --member="principalSet://iam.googleapis.com/projects/$PN/locations/global/workloadIdentityPools/github/attribute.repository/unknown-spec10/YourPDF" \
+  --role="roles/iam.workloadIdentityUser" --project $PROJECT
+```
+
+Repository **variables** (Settings → Secrets and variables → Actions → Variables):
+
+| Variable | Value |
+|---|---|
+| `GCP_PROJECT_ID` | `gen-lang-client-0977081292` |
+| `GCP_REGION` | `asia-south1` |
+| `GCP_SERVICE_NAME` | `yourpdf-web` |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/803645689505/locations/global/workloadIdentityPools/github/providers/github` |
+| `GCP_DEPLOY_SERVICE_ACCOUNT` | `yourpdf-deploy@gen-lang-client-0977081292.iam.gserviceaccount.com` |
+| `PUBLIC_SITE_URL` | `https://yourpdf-web-vhkjwky42a-el.a.run.app` |
+
+Secrets already present: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
+
+## Verifying a deploy
+
+```bash
+URL=https://yourpdf-web-vhkjwky42a-el.a.run.app
+curl -fsS "$URL/health"            # {"status":"ok","service":"yourpdf-backend"}
+curl -sI "$URL/" | head -3         # 200 text/html — the Next export, not an API error
+```
+
+A `200 /health` proves almost nothing on its own (it is a static JSON with no dependency checks), so
+check one real tool as well:
+
+```bash
+curl -sS -o out.jpg -w '%{http_code} %{size_download}\n' \
+  -F "file=@web/fixtures/sample.png" -F "target_format=jpg" "$URL/api/image/convert"
+```
+
+Route paths have **no `/pdf` segment**: merge is `/api/merge`, info is `/api/pdf-info`, splitting
+takes `mode` + `pages_spec` (not `pages`). Streaming is expected — a ZIP-producing call returns
+`Transfer-Encoding: chunked` and no `content-length`, which is how outputs larger than the 32 MiB
+HTTP/1.1 response cap get through.
+
+Limits to spot-check: two 16 MB files → the app's own JSON **413** with a friendly message; two 20 MB
+files → Cloud Run's HTML 413 (the host rejects above 32 MiB before Python runs); `pages=1-999` on a
+small PDF → **400** from the render budget.
+
+## Rollback
+
+```bash
+gcloud run revisions list --service yourpdf-web --region asia-south1 --format='table(name,active)'
+gcloud run services update-traffic yourpdf-web --region asia-south1 --to-revisions <previous-revision>=100
+```
+
+A revision that cannot pull its image never receives traffic, so a failed deploy leaves the previous
+one serving. Prefer rolling traffic back over deleting revisions.
+
+## Traps
+
+- **Docker Hub mirror lag** — see above; retry, never rebuild.
+- **Two Docker Hub accounts hold this app.** The repo secret `DOCKERHUB_USERNAME` is
+  `unknowndockerishere` (what CI uses); the first manual deploy pushed to `deepdocker2023`. Both
+  repos are public and functional, so a running revision can come from either — check
+  `spec.containers[0].image` on the revision before assuming which build is live.
+- **No IAP, and it cannot be added on this project.** IAP's OAuth client attaches to an
+  Organization-level brand; `GET https://iap.googleapis.com/v1/projects/803645689505/brands` answers
+  `Project must belong to an organization`, and the IAP OAuth Admin APIs were shut down in 2026. A
+  service deployed with `--iap` on a no-org project goes Ready and then returns **502
+  `Empty Google Account OAuth client ID(s)/secret(s)`** to every request. A real sign-in wall needs a
+  Cloud Identity org (domain + DNS) first.
+- **`/tmp` is RAM.** Uploads, intermediate files and the finished output all count against the 4 GiB.
+- **Cold starts are 5–10 s** with `--min-instances 0`; that is the accepted trade for cost.
+- **`gcloud run services update` has no `--allow-unauthenticated`** — it prints help and exits 1. Use
+  `add-iam-policy-binding` as shown.
+- **`--no-traffic` is not accepted at service creation**, only on updates.
+- **The build is ~1.34 GB and takes 4–6 min**; a push over a slow uplink takes several more. Run long
+  builds in the background and watch the log file's mtime — a log that has not grown for ~10 minutes
+  while a package install runs is hung, not slow.
+- **Budget alerting is not configured.** The project bills to a billing account
+  (`billingAccounts/014BB7-734838-D1BD80`) that the current login cannot see, so
+  `gcloud billing budgets create` fails with `INVALID_ARGUMENT` rather than a permission error.

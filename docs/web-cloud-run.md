@@ -1,5 +1,11 @@
 # YourPDF Web on GCP Cloud Run — Architecture Assessment
 
+> **Superseded for operational detail.** The service shipped on 2026-11-17 without IAP (the project
+> has no Organization, so an IAP OAuth client cannot exist) and without Artifact Registry (the image
+> lives on Docker Hub). For the live commands, CI setup, verification and rollback, read
+> `docs/deploy.md`. Read this file for *why* the design looks the way it does — the 32 MiB envelope,
+> chunked responses, sizing and the h2c rejection all still hold.
+
 **Status:** the deployment analysis that survived the desktop retirement. The desktop build is
 gone (see `docs/architecture.md`), which removed the frozen-tree constraint this document was
 written around: the guards now live in `backend/app` rather than in `web/` adapters, and CI no

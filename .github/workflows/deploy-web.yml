@@ -61,7 +61,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Same major as web/Dockerfile (node:24-bookworm-slim) so a test pass means what the
+          # image build will do, not what a different Node resolves.
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -71,6 +73,9 @@ jobs:
         # the vitest suite only ever runs on the author's laptop.
         run: |
           cd frontend
+          # Must match web/Dockerfile: npm 10 resolves the optional platform deps in the
+          # lockfile differently and `npm ci` dies with "Missing: @emnapi/runtime".
+          npm i -g npm@11.6.1
           npm ci --no-audit --no-fund
           npm test
 

@@ -58,6 +58,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend unit tests
+        # The "switch account" logic (query preservation, de-dup, hidden when IAP is off) is
+        # pure frontend code that the container smoke suite never exercises. Without this step
+        # the vitest suite only ever runs on the author's laptop.
+        run: |
+          cd frontend
+          npm ci --no-audit --no-fund
+          npm test
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -145,15 +161,40 @@ jobs:
         run: |
           IMAGE_TAG="$IMAGE_REPO:latest"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          REPO_PATH="${IMAGE_REPO#docker.io/}"
+
+          # mirror.gcr.io is a pull-through cache: it only fetches a digest when someone asks for
+          # it, so right after a push it answers 404 for minutes while Docker Hub serves the tag
+          # fine. Probing the mirror directly both waits the lag out and warms the cache Cloud Run
+          # will pull from; deploying against a cold mirror only burns a minute and leaves an
+          # unready revision behind. Observed 2026-11-18: four blind attempts (~7 min) all failed,
+          # and the same digest deployed once the mirror had been probed.
+          warm_mirror() {
+            local rounds="${1:-24}" i code=""
+            for i in $(seq 1 "$rounds"); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' \
+                -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+                "https://mirror.gcr.io/v2/$REPO_PATH/manifests/$DIGEST" || true)
+              if [ "$code" = "200" ]; then
+                echo "Mirror serves $DIGEST (after $i probe(s))."
+                return 0
+              fi
+              sleep 15
+            done
+            echo "Mirror still answers '$code' for $DIGEST after $rounds probes." >&2
+            return 1
+          }
+
           deployed=false
-          for attempt in 1 2 3 4; do
+          for attempt in 1 2 3 4 5 6; do
             DIGEST=$(docker buildx imagetools inspect "$IMAGE_TAG" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
             if [ -z "$DIGEST" ]; then
-              echo "Attempt $attempt/4: tag $IMAGE_TAG is not resolvable yet; retrying in 15 s..."
+              echo "Attempt $attempt/6: tag $IMAGE_TAG is not resolvable yet; retrying in 15 s..."
               sleep 15
               continue
             fi
-            echo "Deploy attempt $attempt/4: $IMAGE_REPO@$DIGEST ($IMAGE_TAG)"
+            echo "Deploy attempt $attempt/6: $IMAGE_REPO@$DIGEST ($IMAGE_TAG)"
+            warm_mirror 24 || true # up to 6 min of waiting/warming before each attempt
             if gcloud run deploy "$SERVICE" \
               --image "$IMAGE_REPO@$DIGEST" \
               --project "$PROJECT" \
@@ -176,13 +217,13 @@ jobs:
               break
             fi
             echo "Attempt $attempt failed (mirror lag is the usual cause)."
-            if [ "$attempt" -lt 4 ]; then
-              echo "Retrying with a freshly resolved digest in 90 s..."
-              sleep 90
+            if [ "$attempt" -lt 6 ]; then
+              echo "Retrying with a freshly resolved digest in 60 s..."
+              sleep 60
             fi
           done
           if [ "$deployed" != "true" ]; then
-            echo "All 4 deploy attempts failed." >&2
+            echo "All 6 deploy attempts failed." >&2
             exit 1
           fi
 

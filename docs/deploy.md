@@ -3,7 +3,8 @@
 This is the runbook for the service that is live today. `docs/web-cloud-run.md` is the earlier
 design assessment (32 MiB envelope, h2c, IAP, sizing rationale) — read it for *why*, not for *how*.
 
-**Live:** <https://yourpdf-web-vhkjwky42a-el.a.run.app> — public, no sign-in wall, `max-instances 2`.
+**Live:** <https://yourpdf-web-vhkjwky42a-el.a.run.app> — behind direct Cloud Run **IAP**
+(Google sign-in; `roles/iap.httpsResourceAccessor` required), `max-instances 2`.
 
 | Fact | Value |
 |---|---|
@@ -69,8 +70,9 @@ gcloud run deploy yourpdf-web \
   --set-env-vars "YOURPDF_TMP=/tmp,HOME=/tmp,TMPDIR=/tmp,MAX_FILE_SIZE_MB=30,MAX_TOTAL_UPLOAD_MB=30,MAX_RENDER_PAGES=100,YOURPDF_OUT=/app/frontend/out,WEB_LOG_LEVEL=info" \
   --labels "commit=<sha>,managed-by=manual" --quiet
 
-# 4. public access (idempotent; there is no --allow-unauthenticated on `services update`)
-gcloud run services add-iam-policy-binding yourpdf-web \
+# 4. access: the service is IAP-protected — do NOT grant public access
+# Granting allUsers roles/run.invoker makes the IAP gate cosmetic.
+gcloud run services remove-iam-policy-binding yourpdf-web \
   --project gen-lang-client-0977081292 --region asia-south1 \
   --member=allUsers --role=roles/run.invoker --quiet
 ```
@@ -109,8 +111,11 @@ the container with `--fail-on-skip` (a missing LibreOffice Impress or tessdata p
 not on a user's `.pptx`), and asserts the static export is in the image.
 
 **deploy** — skipped while `vars.GCP_PROJECT_ID` is empty. Otherwise: WIF auth, resolve `:latest` to
-a digest with `docker buildx imagetools inspect`, deploy `repo@sha256:...`, add the `allUsers`
-invoker binding, poll `/health` to 200, write URL + digest to the run summary.
+a digest with `docker buildx imagetools inspect`, deploy `repo@sha256:...` (no `--iap` flag: the
+service-level IAP setting persists across revisions), then verify the revision is Ready **and** that
+an unauthenticated request is answered with a `302` to `accounts.google.com` — with IAP on, `/health`
+can never return 200 to CI, so that redirect is the success condition. It never grants `allUsers`.
+URL, revision, digest and gate status go to the run summary.
 
 The deploy retries up to 4 times, 90 s apart, re-resolving the digest on each attempt. That loop
 exists because the Docker Hub mirror lags a fresh push: the first 1–3 attempts answer
@@ -208,16 +213,25 @@ one serving. Prefer rolling traffic back over deleting revisions.
   `repo@sha256:...`), so rollback is a traffic shift, not a hunt through tags. The account
   `unknowndockerishere` was emptied and retired on 2026-11-17 (all 8 of its images deleted); do not
   push there again.
-- **No IAP, and it cannot be added on this project.** IAP's OAuth client attaches to an
-  Organization-level brand; `GET https://iap.googleapis.com/v1/projects/803645689505/brands` answers
-  `Project must belong to an organization`, and the IAP OAuth Admin APIs were shut down in 2026. A
-  service deployed with `--iap` on a no-org project goes Ready and then returns **502
-  `Empty Google Account OAuth client ID(s)/secret(s)`** to every request. A real sign-in wall needs a
-  Cloud Identity org (domain + DNS) first.
+- **IAP works here, but only through a Console-created OAuth client.** Direct Cloud Run IAP needs no
+  load balancer and costs nothing beyond normal request usage, but on a project without an
+  Organization the API path is closed (`GET .../projects/803645689505/brands` answers `Project must
+  belong to an organization`; `clientauthconfig.googleapis.com` refuses to enable). The working route:
+  create a **Web application** OAuth client in the Console, add the redirect
+  `https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect`, then attach it with
+  `gcloud alpha iap settings set iap.yaml --resource-type=cloud-run --service=yourpdf-web`
+  (`accessSettings.oauthSettings.clientId` / `clientSecret`), and only then enable IAP. Toggling IAP
+  *before* the client is attached makes every request return **502 `Empty Google Account OAuth client
+  ID(s)/secret(s)`** while the revision still reports Ready.
+  Verify the secret without a browser: POST to `https://oauth2.googleapis.com/token` with a bogus
+  code — `invalid_grant` means the client id, secret and redirect are all valid, `invalid_client`
+  means the secret is wrong, `redirect_uri_mismatch` means the redirect was never registered.
+- **`allUsers` defeats IAP.** With `allUsers` → `roles/run.invoker` the sign-in page still appears but
+  the gate is bypassable. Never re-add it.
 - **`/tmp` is RAM.** Uploads, intermediate files and the finished output all count against the 4 GiB.
 - **Cold starts are 5–10 s** with `--min-instances 0`; that is the accepted trade for cost.
-- **`gcloud run services update` has no `--allow-unauthenticated`** — it prints help and exits 1. Use
-  `add-iam-policy-binding` as shown.
+- **`gcloud run services update` has no `--allow-unauthenticated`** — it prints help and exits 1. With
+  IAP on, public access is never granted; the service policy carries only the IAP service agent.
 - **`--no-traffic` is not accepted at service creation**, only on updates.
 - **The build is ~1.34 GB and takes 4–6 min**; a push over a slow uplink takes several more. Run long
   builds in the background and watch the log file's mtime — a log that has not grown for ~10 minutes

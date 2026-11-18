@@ -77,7 +77,7 @@ function DocxHtmlPreview({ file }: { file: File }) {
 
   return (
     <div className="mt-3 min-w-0">
-      <div className="max-h-[480px] overflow-y-auto overscroll-contain rounded-lg border border-border bg-background p-4">
+      <div className="max-h-[480px] overflow-y-auto rounded-lg border border-border bg-background p-4">
         <div
           className="min-w-0 text-sm leading-relaxed text-foreground [&_h1]:mb-2 [&_h1]:text-base [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:mb-2 [&_p]:break-words [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mb-1 [&_table]:mb-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-[13px] [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-surface-2 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold [&_img]:max-w-full [&_img]:rounded-md"
           dangerouslySetInnerHTML={{ __html: html }}

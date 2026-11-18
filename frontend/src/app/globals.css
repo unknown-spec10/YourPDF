@@ -458,3 +458,15 @@ progress.spinner:indeterminate::-moz-progress-bar {
     transform: none;
   }
 }
+
+/* Inline document previews are pictures, not widgets. The PDF viewer inside an <iframe> swallows
+   wheel events, so with the cursor over the preview the page would not scroll at all -- the
+   "big picture preview blocks scrolling" trap. Dialogs re-enable interaction: there, scrolling
+   the document is the point, and the page behind is inert anyway. */
+iframe:not(dialog iframe) {
+  pointer-events: none;
+}
+
+dialog iframe {
+  pointer-events: auto;
+}

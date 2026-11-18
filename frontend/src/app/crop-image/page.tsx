@@ -135,7 +135,7 @@ export default function CropImagePage() {
               )} px`
             : '—',
         children: (
-          <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-auto overscroll-contain flex justify-center items-start bg-background rounded-lg border border-border p-3">
+          <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-auto flex justify-center items-start bg-background rounded-lg border border-border p-3">
             {imgSrc ? (
               <ReactCrop crop={crop} onChange={(c) => setCrop(c)} className="max-w-full">
                 <img

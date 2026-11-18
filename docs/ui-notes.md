@@ -44,6 +44,26 @@ column held at `top: 80px` after scrolling 454 px.
 
 ![Sticky controls](preview-sticky-controls.png)
 
+## Scrolling over a preview
+
+A preview that captures the wheel makes the page feel broken: with the cursor over a large
+preview the page refuses to move until the pointer leaves it. Two rules keep that from happening.
+
+- **No `overscroll-behavior: contain` on inline panes.** It stops the wheel at the pane's edge, so
+  the page never continues. Chaining is the behaviour people expect: the pane scrolls, then the
+  page does. Modals keep `contain` (`dialog:modal`, `::backdrop`), because the page behind them is
+  inert anyway.
+- **Inline `<iframe>` previews are pointer-transparent** (`iframe:not(dialog iframe)`). The PDF
+  viewer inside an iframe swallows wheel events entirely, so the page cannot scroll at all while
+  the pointer is over one. Making it transparent also means clicks reach the wrapper, which is what
+  opens the zoom dialog. Dialogs opt back in (`dialog iframe`), where scrolling the document is
+  the point.
+
+Verified by driving a real browser: with the pointer over a PDF preview the page scrolled
+0 -> 500 -> 1000 -> 1500 px; over an image preview it scrolled immediately; with a zoom dialog
+open, the page stayed at 0 while the document inside the dialog scrolled. `scroll-traps.test.ts`
+guards both rules.
+
 ## Result state: hand-off, not a dead end
 
 The done screen offers the download, Web Share (where the platform can share files), and

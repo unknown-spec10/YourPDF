@@ -438,10 +438,10 @@ export default function ToolShell({
               }`}
             >
               {/* Sticky on desktop: a long preview must not scroll the controls out of reach.
-                  The column gets its own scrollport so a tall settings panel (many pages do) is
-                  still reachable, and `overscroll-contain` stops that inner scroll from chaining
-                  to the page once it hits the end. */}
-              <div className="flex flex-col gap-4 min-w-0 order-1 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 lg:[scrollbar-gutter:stable]">
+                  The column gets its own scrollport so a tall settings panel is still reachable.
+                  No `overscroll-contain`: when the panel reaches its end the wheel must carry on
+                  to the page, otherwise the page appears frozen while the cursor is over it. */}
+              <div className="flex flex-col gap-4 min-w-0 order-1 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-y-auto lg:pr-1 lg:[scrollbar-gutter:stable]">
                 {settings}
                 <div className="sticky bottom-3 lg:bottom-0 lg:-mx-1 lg:px-1 lg:pb-1 lg:bg-background/90 lg:backdrop-blur-sm">
                   <button

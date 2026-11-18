@@ -205,7 +205,7 @@ export default function ResizeImagePage() {
         title: 'Source preview',
         aside: mode === 'percentage' ? `${percentage}%` : `${width || 'auto'} × ${height || 'auto'}`,
         children: (
-          <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-auto overscroll-contain flex items-center justify-center bg-background rounded-lg border border-border">
+          <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-auto flex items-center justify-center bg-background rounded-lg border border-border">
             {imgSrc ? (
               <img
                 src={imgSrc}

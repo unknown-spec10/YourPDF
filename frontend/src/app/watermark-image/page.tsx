@@ -191,7 +191,7 @@ export default function WatermarkImagePage() {
         title: 'Live preview',
         aside: positionLabel,
         children: (
-          <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-auto overscroll-contain flex items-center justify-center bg-background rounded-lg border border-border p-3">
+          <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-auto flex items-center justify-center bg-background rounded-lg border border-border p-3">
             {imgSrc ? (
               <div className="relative inline-block max-w-full min-w-0">
                 <img

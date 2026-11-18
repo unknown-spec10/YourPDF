@@ -115,7 +115,7 @@ export default function ImagesToPdfPage() {
           title: 'Page order',
           aside: `${files.length} pages`,
           children: (
-            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[420px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden overscroll-contain">
+            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[420px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden">
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
                 {files.map((file, index) => {
                   const key = `${file.name}-${index}`

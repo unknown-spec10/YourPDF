@@ -256,7 +256,7 @@ export default function SplitPage() {
                 : `${numPages} files`
               : undefined,
           children: (
-            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden overscroll-contain">
+            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden">
               {numPages !== null ? (
                 mode === 'custom' ? (
                   selectedPagesList.length > 0 ? (

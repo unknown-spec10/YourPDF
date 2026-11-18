@@ -152,7 +152,7 @@ export default function OrganizePage() {
           title: 'Reorganized flow',
           aside: numPages !== null ? `${parsedSequence.length} pages` : undefined,
           children: (
-            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden overscroll-contain">
+            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden">
               {parsedSequence.length > 0 ? (
                 <div className="flex flex-col gap-3">
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">

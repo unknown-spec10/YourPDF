@@ -102,7 +102,7 @@ export default function AddPageNumbersPage() {
           title: '02 — Placement preview',
           aside: POSITION_LABELS[position] ?? position,
           children: (
-            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden overscroll-contain flex flex-col items-center">
+            <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[520px] max-h-[52vh] lg:max-h-[68vh] overflow-y-auto overflow-x-hidden flex flex-col items-center">
               <div
                 onClick={() => fileUrl && setIsZoomOpen(true)}
                 className={`relative w-full max-w-[560px] aspect-[3/4] rounded-lg border border-card-border bg-background overflow-hidden group transition-colors ${
